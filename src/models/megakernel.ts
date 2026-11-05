@@ -79,6 +79,7 @@ class MegakernelDataSource implements ReplayDataSource {
     })
   }
   statistics(query: EventQuery) { return this.source.statistics(this.rawQuery(query)) }
+  cuStatistics(range: TimeRange) { return this.source.groupedStatistics(this.rawQuery(range), this.device.cus.map(cu => ({ id: cu.id, trackIds: [...new Set(cu.groups.flatMap(group => group.trackIds))] }))) }
   async search(text: string, limit = 100) { return (await this.source.search(text, limit)).map(event => this.mapEvent(event)).filter((event): event is ReplayEvent => event !== null) }
   async boundary(time: bigint, direction: -1 | 1) {
     const value = await this.source.boundary(time + this.source.metadata.start - this.offset, direction)

@@ -1,5 +1,6 @@
-import type { DensityBin, EventQuery, ImportProgress, ParsedTraceSource, RawSpan, SourceMetadata, SqlRow, TraceFileParser } from '../../core/types'
+import type { DensityBin, EventQuery, ImportProgress, ParsedTraceSource, RawSpan, SourceMetadata, SqlRow, TimeRange, TraceFileParser, TrackGroup } from '../../core/types'
 import { PerfettoEngine } from './engine'
+import { queryGroupedStatistics } from './grouped-statistics'
 
 const integer = (value: SqlRow[string]): bigint => typeof value === 'bigint' ? value : BigInt(String(value ?? 0))
 const number = (value: SqlRow[string]): number => Number(value ?? 0)
@@ -70,6 +71,7 @@ class PerfettoSource implements ParsedTraceSource {
     const row = rows[0]!
     return { count: number(row.count), sumDuration: integer(row.sum_duration), unionDuration: integer(row.union_duration) }
   }
+  groupedStatistics(range: TimeRange, groups: TrackGroup[]) { return queryGroupedStatistics(this.engine, range, groups, this.metadata.end) }
   async search(value: string, limit = 100) {
     const literal = value.replaceAll("'", "''")
     return (await this.engine.query(`SELECT id, track_id, name, ts, dur, depth, arg_set_id FROM slice WHERE INSTR(LOWER(name), LOWER('${literal}')) > 0 ORDER BY ts, id LIMIT ${Math.min(200, Math.max(1, Math.trunc(limit)))}`)).map(row => this.span(row))

@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { MegakernelModel } from '../../src/models/megakernel'
 import { parseProject } from '../../src/core/project'
 import { fitRange, parseMilliseconds, unionDuration } from '../../src/core/time'
-import type { ParsedTraceSource, RawSpan, RawTrack } from '../../src/core/types'
+import type { ParsedTraceSource, RawSpan, RawTrack, TimeRange, TrackGroup } from '../../src/core/types'
 
 function source(id = 'source-a'): ParsedTraceSource {
   const tracks: RawTrack[] = [{ id: 0, parentId: null, name: 'block_0' }, { id: 1, parentId: 0, name: 'group_0' }, { id: 2, parentId: 1, name: 'group_0' }, { id: 3, parentId: null, name: 'block_1' }, { id: 4, parentId: 3, name: 'group_0' }]
   const event: RawSpan = { id: 1, trackId: 2, name: 'TASK_EXAMPLE', depth: 0, argSetId: 0, start: 1000n, end: 2000n, incomplete: false }
-  return { metadata: { id, filename: 'demo_rank0_gpu1.trace', bytes: 10, fingerprint: 'a'.repeat(64), parserId: 'custom', parserVersion: '1', start: 1000n, end: 4000n, eventCount: 1, trackCount: 5, counterCount: 0, incompleteCount: 0, engineVersion: 'test' }, tracks: async () => tracks, events: vi.fn(async () => ({ events: [event], truncated: false })), density: async () => [], statistics: async () => ({ count: 1, sumDuration: 1000n, unionDuration: 1000n }), search: async () => [event], boundary: async () => 2000n, args: async () => ({}), close: vi.fn() }
+  return { metadata: { id, filename: 'demo_rank0_gpu1.trace', bytes: 10, fingerprint: 'a'.repeat(64), parserId: 'custom', parserVersion: '1', start: 1000n, end: 4000n, eventCount: 1, trackCount: 5, counterCount: 0, incompleteCount: 0, engineVersion: 'test' }, tracks: async () => tracks, events: vi.fn(async () => ({ events: [event], truncated: false })), density: async () => [], statistics: async () => ({ count: 1, sumDuration: 1000n, unionDuration: 1000n }), groupedStatistics: vi.fn(async (_range: TimeRange, groups: TrackGroup[]) => groups.map(group => ({ groupId: group.id, count: 1, sumDuration: 1000n, unionDuration: 1000n }))), search: async () => [event], boundary: async () => 2000n, args: async () => ({}), close: vi.fn() }
 }
 
 describe('Megakernel compute interpretation', () => {
@@ -25,6 +25,12 @@ describe('Megakernel compute interpretation', () => {
     const other = await new MegakernelModel().build(source('source-b'))
     expect(other.device.cus[0]!.id).not.toBe(model.device.cus[0]!.id)
     expect(await model.boundary(500n, 1)).toBe(1500n)
+    const statistics = await model.cuStatistics({ start: 500n, end: 1500n })
+    expect(raw.groupedStatistics).toHaveBeenCalledWith({ start: 1000n, end: 2000n }, [
+      { id: model.device.cus[0]!.id, trackIds: [0, 1, 2] },
+      { id: model.device.cus[1]!.id, trackIds: [3, 4] },
+    ])
+    expect(statistics[0]!.groupId).toBe(model.device.cus[0]!.id)
   })
 
   it('rejects an unrelated trace with no block hierarchy', async () => {

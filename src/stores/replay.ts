@@ -45,7 +45,7 @@ export const useReplayStore = defineStore('replay', () => {
   const selectionStats = shallowRef<RangeStatistics | null>(null)
   const statisticsLoading = ref(false)
   const toast = ref<{ message: string; kind: 'error' | 'info' } | null>(null)
-  const activeView = ref<'resources' | 'tasks' | 'metrics'>('resources')
+  const activeView = ref<'resources' | 'tasks' | 'utilization' | 'metrics'>('resources')
   const pendingProject = shallowRef<ProjectSnapshot | null>(null)
   const trackCache = new Map<string, RawTrack[]>()
   const clock = markRaw(new PlaybackClock())
