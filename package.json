@@ -1,0 +1,39 @@
+{
+  "name": "visualstream",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "setup:assets": "node scripts/setup-assets.mjs",
+    "typecheck:core": "node scripts/check-core.mjs",
+    "typecheck": "npm run typecheck:core && node scripts/check-core.mjs tsconfig.tools.json && vue-tsc --noEmit -p tsconfig.app.json",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@vue/devtools-api": "8.2.1",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-vue-next": "1.0.0",
+    "pinia": "4.1.0",
+    "protobufjs": "8.8.1",
+    "reka-ui": "2.11.0",
+    "tailwind-merge": "3.7.0",
+    "vue": "3.5.44"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tailwindcss/vite": "4.3.4",
+    "@types/node": "26.6.6",
+    "@vitejs/plugin-vue": "6.0.10",
+    "tailwindcss": "4.3.4",
+    "typescript": "npm:typescript-native-bridge@6.0.3-bridge.19.tsgo.7.0.2",
+    "typescript-native": "npm:typescript@7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.1.0",
+    "vue-tsc": "3.3.14"
+  }
+}

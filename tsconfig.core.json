@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": ["src/core/**/*.ts", "src/parsers/**/*.ts", "src/models/**/*.ts", "src/workers/**/*.ts", "src/engine/**/*.ts"],
+  "exclude": ["src/**/*.vue"]
+}

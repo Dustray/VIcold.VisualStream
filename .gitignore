@@ -1,0 +1,31 @@
+# Dependencies and generated assets
+node_modules/
+dist/
+public/vendor/perfetto/
+public/samples/
+
+# Tests and local caches
+coverage/
+playwright-report/
+test-results/
+.local/
+.cache/
+.vite/
+*.tsbuildinfo
+
+# Local configuration and replay sessions
+*.local
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.vstream.json
+
+# Logs and editor / operating system files
+*.log
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
