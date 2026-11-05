@@ -2,6 +2,13 @@ import type { TimeRange } from './types'
 
 export const NS_PER_MS = 1_000_000n
 export const NS_PER_SECOND = 1_000_000_000n
+export function timeBuckets(range: TimeRange, buckets: number): TimeRange[] {
+  const span = range.end - range.start
+  if (span <= 0n || !Number.isFinite(buckets) || buckets < 1) return []
+  const count = Math.min(2048, Math.trunc(buckets))
+  const length = span < BigInt(count) ? Number(span) : count
+  return Array.from({ length }, (_, index) => ({ start: range.start + span * BigInt(index) / BigInt(length), end: range.start + span * BigInt(index + 1) / BigInt(length) }))
+}
 export const clampTime = (value: bigint, range: TimeRange): bigint => value < range.start ? range.start : value > range.end ? range.end : value
 export const duration = (range: TimeRange): bigint => range.end - range.start
 

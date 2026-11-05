@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Crosshair, Expand, Focus, LoaderCircle, Minus, Plus } from 'lucide-vue-next'
 import { duration, eventColor, formatTime } from '../core/time'
 import type { ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
 import { useReplayStore } from '../stores/replay'
+import { TimelineCache, type TimelineRequest, type TimelineTrackData } from '../engine/timeline-cache'
 
 const store = useReplayStore()
 const viewportElement = ref<HTMLDivElement | null>(null)
@@ -16,6 +17,20 @@ const dense = ref(true)
 const panning = ref(false)
 const scrollTop = ref(0)
 const tooltip = ref<{ left: number; top: number; label: string; description: string } | null>(null)
+const overviewHover = ref<{ left: number; index: number } | null>(null)
+const overviewBusy = computed(() => store.overviewActivity.reduce((total, bin) => total + bin.busyDuration, 0n))
+const overviewCapacity = computed(() => duration(store.bounds) * BigInt(store.cus.length))
+const overviewSummary = computed(() => {
+  if (store.overviewActivityLoading) return '正在统计…'
+  if (store.overviewActivityError) return '统计失败，切换后重试'
+  if (!store.overviewActivity.length || !overviewCapacity.value) return '暂无数据 · 0–100%'
+  return `全程 ${(Number(overviewBusy.value) / Number(overviewCapacity.value) * 100).toFixed(2)}% · 0–100%`
+})
+const overviewTooltip = computed(() => {
+  const bin = overviewHover.value && store.overviewActivity[overviewHover.value.index]
+  if (store.overviewMetric !== 'utilization' || !bin || !store.cus.length) return null
+  return { left: overviewHover.value!.left, label: `任务利用率 ${(Number(bin.busyDuration) / Number((bin.end - bin.start) * BigInt(store.cus.length)) * 100).toFixed(2)}%`, description: `${formatTime(bin.start)} – ${formatTime(bin.end)} · ${store.cus.length} 个已记录 CU` }
+})
 const gutter = 170
 const ruler = 31
 const rowHeight = 29
@@ -24,10 +39,23 @@ let height = 280
 let observer: ResizeObserver | null = null
 let drawFrame = 0
 let overlayFrame = 0
-let queryTimer: ReturnType<typeof setTimeout> | null = null
+let queryFrame = 0
+let queryRunning = false
+let queryRequested = false
+let disposed = false
 let queryVersion = 0
-let data: { events: ReplayEvent[]; bins: ReplayDensity[] } = { events: [], bins: [] }
-const cache = new Map<string, { events: ReplayEvent[]; bins: ReplayDensity[]; dense: boolean }>()
+let data = new Map<string, TimelineTrackData>()
+const cache = new TimelineCache()
+const overviewTracks = computed(() => {
+  const tracks = new Map<string, ReplayDensity[]>()
+  for (const bin of store.overview) {
+    const key = `${bin.sourceId}:${bin.trackId}`
+    const bins = tracks.get(key) ?? []
+    bins.push(bin)
+    tracks.set(key, bins)
+  }
+  return tracks
+})
 let hits: { event?: ReplayEvent; bin?: ReplayDensity; left: number; right: number; top: number; bottom: number }[] = []
 let gesture: { kind: 'pan' | 'scrub' | 'select'; x: number; y: number; origin: bigint; viewport: TimeRange; event: ReplayEvent | null; resume: boolean; moved: boolean } | null = null
 let overviewGesture: { kind: 'left' | 'right' | 'move'; x: number; range: TimeRange } | null = null
@@ -48,51 +76,67 @@ function toTime(horizontal: number): bigint { return store.viewport.start + BigI
 function position(event: PointerEvent | WheelEvent): { x: number; y: number } { const bounds = overlay.value!.getBoundingClientRect(); return { x: event.clientX - bounds.left, y: event.clientY - bounds.top } }
 function rememberPointer(horizontal: number): void { store.setZoomPointer(horizontal < gutter || horizontal > width - 13 ? null : (horizontal - gutter) / plotWidth()) }
 function pointerLeave(): void { tooltip.value = null; store.setZoomPointer(null) }
-function visibleRows(): TimelineRow[] { const first = Math.max(0, Math.floor(scrollTop.value / rowHeight) - 1); return store.rows.slice(first, Math.min(store.rows.length, Math.ceil((scrollTop.value + height - ruler) / rowHeight) + 2)) }
+function visibleRows(padding = 0): TimelineRow[] { const first = Math.max(0, Math.floor(scrollTop.value / rowHeight) - 1 - padding); return store.rows.slice(first, Math.min(store.rows.length, Math.ceil((scrollTop.value + height - ruler) / rowHeight) + 2 + padding)) }
 function scheduleBackground(): void { if (!drawFrame) drawFrame = requestAnimationFrame(draw); scheduleOverlay() }
 function scheduleOverlay(): void { if (!overlayFrame) overlayFrame = requestAnimationFrame(drawOverlay) }
 function invalidate(): void {
+  updateData()
   scheduleBackground()
-  if (queryTimer) clearTimeout(queryTimer)
-  queryVersion++
-  queryTimer = setTimeout(() => { void query() }, 30)
+  queryRequested = true
+  if (!queryFrame) queryFrame = requestAnimationFrame(() => { queryFrame = 0; void query() })
+}
+
+function requests(timePadding = 0n, rowPadding = 0): TimelineRequest[] {
+  const visible = visibleRows(rowPadding).filter(row => row.kind !== 'device')
+  const range = { start: store.viewport.start - timePadding > store.bounds.start ? store.viewport.start - timePadding : store.bounds.start, end: store.viewport.end + timePadding < store.bounds.end ? store.viewport.end + timePadding : store.bounds.end }
+  const resolution = Number(duration(store.viewport)) / plotWidth()
+  return store.sources.map(source => ({ source, range, resolution, density: resolution > 18000, trackIds: [...new Set(visible.filter(row => row.sourceId === source.source.metadata.id).flatMap(row => row.trackIds))] })).filter(request => request.trackIds.length)
+}
+
+function updateData(): void {
+  const next = new Map<string, TimelineTrackData>()
+  let anyDensity = false
+  let missing = false
+  for (const request of requests()) {
+    missing ||= !cache.covers(request)
+    for (const trackId of request.trackIds) {
+      const key = `${request.source.source.metadata.id}:${trackId}`
+      const track = cache.read(request, trackId) ?? { events: [], bins: overviewTracks.value.get(key) ?? [], dense: true }
+      next.set(key, track)
+      anyDensity ||= track.dense
+    }
+  }
+  data = next
+  dense.value = anyDensity
+  querying.value = missing && !store.loading
 }
 
 async function query(): Promise<void> {
-  const version = ++queryVersion
-  const visible = visibleRows().filter(row => row.kind !== 'device')
-  if (!store.sources.length || !visible.length) { data = { events: [], bins: [] }; scheduleBackground(); return }
-  querying.value = true
-  const queryRange = { ...store.viewport }
-  const useDensity = Number(duration(queryRange)) / plotWidth() > 18000
-  const nextEvents: ReplayEvent[] = []
-  const nextBins: ReplayDensity[] = []
-  let anyDensity = useDensity
+  if (queryRunning || disposed) return
+  queryRequested = false
+  if (store.loading) return
+  const rowCount = Math.max(1, Math.ceil((height - ruler) / rowHeight))
+  const warm = requests(duration(store.viewport) / 4n, Math.ceil(rowCount / 3))
+  if (warm.every(request => cache.covers(request))) { updateData(); scheduleBackground(); return }
+  const pending = requests(duration(store.viewport), rowCount).filter(request => {
+    const required = warm.find(candidate => candidate.source === request.source)
+    return !required || !cache.covers(required)
+  })
+  const version = queryVersion
+  queryRunning = true
   try {
-    await Promise.all(store.sources.map(async source => {
-      const trackIds = [...new Set(visible.filter(row => row.sourceId === source.source.metadata.id).flatMap(row => row.trackIds))]
-      if (!trackIds.length) return
-      const key = `${source.source.metadata.id}:${source.offset}:${queryRange.start}:${queryRange.end}:${useDensity}:${Math.round(plotWidth())}:${trackIds.join(',')}`
-      let entry = cache.get(key)
-      if (!entry) {
-        if (useDensity) entry = { events: [], bins: await source.density({ ...queryRange, trackIds, buckets: Math.max(100, Math.round(plotWidth() / 3)) }), dense: true }
-        else {
-          const page = await source.events({ ...queryRange, trackIds, limit: 35000 })
-          entry = page.truncated ? { events: [], bins: await source.density({ ...queryRange, trackIds, buckets: Math.max(100, Math.round(plotWidth() / 3)) }), dense: true } : { events: page.events, bins: [], dense: false }
-        }
-        cache.set(key, entry)
-        if (cache.size > 20) cache.delete(cache.keys().next().value!)
-      }
-      nextEvents.push(...entry.events)
-      nextBins.push(...entry.bins)
-      anyDensity ||= entry.dense
+    await Promise.all(pending.map(async request => {
+      await cache.load(request)
+      if (version === queryVersion && !disposed) { updateData(); scheduleBackground() }
     }))
-    if (version !== queryVersion) return
-    dense.value = anyDensity
-    data = { events: nextEvents, bins: nextBins }
-    scheduleBackground()
   } catch (error) { if (version === queryVersion) store.notify(error instanceof Error ? error.message : String(error), 'error') }
-  finally { if (version === queryVersion) querying.value = false }
+  finally {
+    queryRunning = false
+    if (!disposed) {
+      querying.value = false
+      if (queryRequested) void query()
+    }
+  }
 }
 
 function draw(): void {
@@ -145,8 +189,8 @@ function draw(): void {
     canvas.restore()
     if (row.kind !== 'device') {
       canvas.save(); canvas.beginPath(); canvas.rect(gutter, top + 2, plotWidth(), rowHeight - 4); canvas.clip()
-      const tracks = new Set(row.trackIds)
-      const bins = data.bins.filter(bin => bin.sourceId === row.sourceId && tracks.has(bin.trackId))
+      const tracks = row.trackIds.map(trackId => data.get(`${row.sourceId}:${trackId}`)).filter((track): track is TimelineTrackData => track !== undefined)
+      const bins = tracks.flatMap(track => track.bins).filter(bin => bin.start < store.viewport.end && bin.end > store.viewport.start)
       const merged = new Map<number, ReplayDensity>()
       for (const bin of bins) {
         const bucket = Math.floor((toX(bin.start) - gutter) / 3)
@@ -162,7 +206,7 @@ function draw(): void {
         canvas.fillRect(left, top + 7, Math.max(2, right - left - 0.5), rowHeight - 14)
         hits.push({ bin, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
       }
-      const events = data.events.filter(event => event.sourceId === row.sourceId && tracks.has(event.trackId)).sort((left, right) => Number((right.end - right.start) - (left.end - left.start)))
+      const events = tracks.flatMap(track => track.events).filter(event => event.start < store.viewport.end && event.end > store.viewport.start).sort((left, right) => Number((right.end - right.start) - (left.end - left.start)))
       for (const event of events) {
         const left = Math.max(gutter, toX(event.start))
         const right = Math.min(width - 13, toX(event.end))
@@ -211,16 +255,26 @@ function drawOverview(): void {
   const canvasWidth = overviewCanvas.value.clientWidth
   const canvas = context(overviewCanvas.value, canvasWidth, 34)
   canvas.fillStyle = '#101620'; canvas.fillRect(0, 0, canvasWidth, 34)
-  canvas.font = '9px "Segoe UI", sans-serif'; canvas.fillStyle = '#6d7c94'; canvas.fillText('全局任务密度', 15, 20)
   const chartWidth = Math.max(1, canvasWidth - gutter - 13)
-  const values = new Array<number>(180).fill(0)
   const full = Number(duration(store.bounds))
-  for (const bin of store.overview) { const index = Math.max(0, Math.min(179, Math.floor(Number(bin.start - store.bounds.start) / full * 180))); values[index]! += bin.count }
-  const maximum = Math.max(1, ...values)
-  for (const [index, value] of values.entries()) {
-    canvas.fillStyle = '#415d88'
-    const barHeight = Math.log1p(value) / Math.log1p(maximum) * 20
-    canvas.fillRect(gutter + index * chartWidth / values.length, 27 - barHeight, Math.max(1, chartWidth / values.length - 1), barHeight)
+  if (store.overviewMetric === 'utilization') {
+    canvas.strokeStyle = '#36544a66'; canvas.beginPath(); canvas.moveTo(gutter, 7); canvas.lineTo(gutter + chartWidth, 7); canvas.moveTo(gutter, 17); canvas.lineTo(gutter + chartWidth, 17); canvas.stroke()
+    for (const bin of store.overviewActivity) {
+      const capacity = (bin.end - bin.start) * BigInt(store.cus.length)
+      const ratio = capacity > 0n ? Math.max(0, Math.min(1, Number(bin.busyDuration) / Number(capacity))) : 0
+      const left = gutter + Number(bin.start - store.bounds.start) / full * chartWidth
+      const barWidth = Number(bin.end - bin.start) / full * chartWidth
+      canvas.fillStyle = '#439c86'; canvas.fillRect(left, 27 - ratio * 20, Math.max(1, barWidth - 1), ratio * 20)
+    }
+  } else {
+    const values = new Array<number>(180).fill(0)
+    for (const bin of store.overview) { const index = Math.max(0, Math.min(179, Math.floor(Number(bin.start - store.bounds.start) / full * 180))); values[index]! += bin.count }
+    const maximum = Math.max(1, ...values)
+    for (const [index, value] of values.entries()) {
+      canvas.fillStyle = '#415d88'
+      const barHeight = Math.log1p(value) / Math.log1p(maximum) * 20
+      canvas.fillRect(gutter + index * chartWidth / values.length, 27 - barHeight, Math.max(1, chartWidth / values.length - 1), barHeight)
+    }
   }
   const left = gutter + Number(store.viewport.start - store.bounds.start) / full * chartWidth
   const right = gutter + Number(store.viewport.end - store.bounds.start) / full * chartWidth
@@ -304,6 +358,7 @@ function wheel(event: WheelEvent): void {
 function scroll(): void { scrollTop.value = scroller.value?.scrollTop ?? 0; invalidate() }
 function overviewDown(event: PointerEvent): void {
   if (!store.sources.length) return
+  overviewHover.value = null
   store.stopZoom()
   const bounds = overviewCanvas.value!.getBoundingClientRect()
   const horizontal = event.clientX - bounds.left
@@ -316,9 +371,14 @@ function overviewDown(event: PointerEvent): void {
   overviewCanvas.value?.setPointerCapture(event.pointerId)
 }
 function overviewMove(event: PointerEvent): void {
-  if (!overviewGesture) return
   const bounds = overviewCanvas.value!.getBoundingClientRect()
   const chartWidth = overviewCanvas.value!.clientWidth - gutter - 13
+  if (!overviewGesture) {
+    const horizontal = event.clientX - bounds.left
+    const index = Math.floor((horizontal - gutter) / chartWidth * store.overviewActivity.length)
+    overviewHover.value = index >= 0 && index < store.overviewActivity.length ? { left: Math.max(gutter, Math.min(bounds.width - 270, horizontal + 12)), index } : null
+    return
+  }
   const delta = BigInt(Math.round((event.clientX - bounds.left - overviewGesture.x) / chartWidth * Number(duration(store.bounds))))
   const range = overviewGesture.range
   if (overviewGesture.kind === 'left') store.setViewport({ start: range.start + delta < range.end - 100n ? range.start + delta : range.end - 100n, end: range.end })
@@ -327,10 +387,11 @@ function overviewMove(event: PointerEvent): void {
 }
 function overviewUp(event: PointerEvent): void { overviewGesture = null; if (overviewCanvas.value?.hasPointerCapture(event.pointerId)) overviewCanvas.value.releasePointerCapture(event.pointerId) }
 
-watch(() => [store.viewport, store.rows, store.sources], invalidate)
+watch(() => [store.viewport, store.rows, store.loading], invalidate)
+watch(() => store.sources, () => { queryVersion++; cache.clear(); invalidate() })
 watch(() => [store.currentTime, store.selection, store.bookmarks], scheduleOverlay, { deep: false })
 watch(() => [store.selectedEvent, store.selectedCuId], scheduleBackground)
-watch(() => store.overview, scheduleBackground)
+watch(() => [store.overview, store.overviewMetric, store.overviewActivity], () => { overviewHover.value = null; updateData(); scheduleBackground() })
 watch(() => store.selectedCuId, id => {
   if (!id || !scroller.value) return
   const index = store.rows.findIndex(row => row.cuId === id)
@@ -342,13 +403,24 @@ onMounted(() => {
   if (viewportElement.value) observer.observe(viewportElement.value)
   invalidate()
 })
-onBeforeUnmount(() => { store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; if (queryTimer) clearTimeout(queryTimer); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
+onBeforeUnmount(() => { disposed = true; store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; cache.clear(); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
 </script>
 
 <template>
   <section class="timeline" aria-label="推理重放时间轴">
     <div class="timeline-heading"><div class="section-label"><span class="tiny-dot blue" />时间轴<span class="timeline-mode">{{ dense ? '密度聚合' : '原始区间' }}</span></div><div class="timeline-heading-actions"><span>{{ formatTime(store.viewport.end - store.viewport.start) }} 可视范围</span><button class="icon-button" aria-label="缩小时间轴" title="缩小 · S" @click="store.zoom(2)"><Minus :size="14" /></button><button class="icon-button" aria-label="放大时间轴" title="放大 · W" @click="store.zoom(0.5)"><Plus :size="14" /></button><span class="toolbar-divider" /><button class="icon-button" aria-label="适配全部时间" title="适配全部时间 · F" @click="store.fit()"><Expand :size="14" /></button><button class="icon-button" aria-label="缩放到选区" title="缩放到选区 · Z" @click="store.zoomSelection()"><Focus :size="14" /></button><button class="icon-button" :class="{ selected: store.following }" aria-label="跟随播放头" :aria-pressed="store.following" title="跟随播放头" @click="store.following = !store.following"><Crosshair :size="14" /></button></div></div>
-    <canvas ref="overviewCanvas" class="timeline-overview" height="34" aria-label="全局任务密度与可视窗口，可拖动边缘缩放" @pointerdown="overviewDown" @pointermove="overviewMove" @pointerup="overviewUp" @pointercancel="overviewUp" />
+    <div class="timeline-overview-strip">
+      <canvas ref="overviewCanvas" class="timeline-overview" height="34" role="img" :aria-label="`${store.overviewMetric === 'density' ? '全局任务密度' : '全局任务利用率'}与可视窗口，可拖动边缘缩放`" :aria-busy="store.overviewActivityLoading" @pointerdown="overviewDown" @pointermove="overviewMove" @pointerup="overviewUp" @pointercancel="overviewUp" @pointerleave="overviewHover = null" />
+      <div class="timeline-overview-controls">
+        <select v-model="store.overviewMetric" aria-label="全局概览指标" title="任务利用率按每段时间内各 CU 的活动时间并集计算，纵轴固定为 0–100%；统计所有计算卡，独立于当前选区和卡筛选。">
+          <option value="density">全局任务密度</option>
+          <option value="utilization">全局任务利用率</option>
+        </select>
+        <span v-if="store.overviewMetric === 'utilization'" class="timeline-overview-summary" :title="store.overviewActivityError ?? `${overviewBusy} / ${overviewCapacity} CU·ns`">{{ overviewSummary }}</span>
+        <span v-else>事件数量 · 对数刻度</span>
+      </div>
+      <div v-if="overviewTooltip" class="canvas-tooltip overview-tooltip" :style="{ left: `${overviewTooltip.left}px` }"><strong>{{ overviewTooltip.label }}</strong><span>{{ overviewTooltip.description }}</span></div>
+    </div>
     <div ref="viewportElement" class="timeline-viewport">
       <canvas ref="background" class="timeline-background" aria-hidden="true" />
       <canvas ref="overlay" class="timeline-overlay" :class="{ panning }" :aria-busy="store.zooming" role="img" aria-label="轨道与任务时间轴。左键拖动框选，右键拖动平移，W 在鼠标处放大，S 在鼠标处缩小，A 向左平移，D 向右平移。点击事件定位到鼠标对应时间。" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @pointerleave="pointerLeave" @dblclick="doubleClick" @wheel.prevent="wheel" @contextmenu.prevent />

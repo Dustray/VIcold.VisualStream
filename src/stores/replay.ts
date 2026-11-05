@@ -2,9 +2,9 @@ import { computed, markRaw, ref, shallowRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { ComputeModelRegistry } from '../core/registry'
 import { WorkerTraceSource } from '../core/worker-source'
-import { clampTime, duration, fitRange, formatTime } from '../core/time'
+import { clampTime, duration, fitRange, formatTime, timeBuckets } from '../core/time'
 import { parseProject, persistProject } from '../core/project'
-import type { Bookmark, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, SampleFile, TimelineRow, TimeRange } from '../core/types'
+import type { ActivityBin, Bookmark, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, SampleFile, TimelineRow, TimeRange } from '../core/types'
 import { IntervalIndex } from '../engine/interval-index'
 import { PlaybackClock } from '../engine/playback-clock'
 import { ViewportZoom } from '../engine/viewport-zoom'
@@ -37,6 +37,10 @@ export const useReplayStore = defineStore('replay', () => {
   const eventArgs = ref<Record<string, string>>({})
   const activeEvents = shallowRef<ReplayEvent[]>([])
   const overview = shallowRef<ReplayDensity[]>([])
+  const overviewMetric = ref<'density' | 'utilization'>('utilization')
+  const overviewActivity = shallowRef<ActivityBin[]>([])
+  const overviewActivityLoading = ref(false)
+  const overviewActivityError = ref<string | null>(null)
   const bookmarks = ref<Bookmark[]>([])
   const expandedGroups = ref(new Set<string>())
   const searchText = ref('')
@@ -59,6 +63,7 @@ export const useReplayStore = defineStore('replay', () => {
   let searchVersion = 0
   let statisticsVersion = 0
   let overviewVersion = 0
+  let overviewActivityVersion = 0
 
   clock.subscribe(value => { currentTime.value = value.time; playing.value = value.playing; buffering.value = value.buffering; speed.value = value.speed })
   const bounds = computed<TimeRange>(() => sources.value.length ? { start: sources.value.reduce((result, source) => source.range.start < result ? source.range.start : result, sources.value[0]!.range.start), end: sources.value.reduce((result, source) => source.range.end > result ? source.range.end : result, sources.value[0]!.range.end) } : { start: 0n, end: 1n })
@@ -205,6 +210,31 @@ export const useReplayStore = defineStore('replay', () => {
       if (version === overviewVersion) overview.value = bins
     } catch (error) { if (version === overviewVersion) notify(String(error), 'error') }
   }
+  async function refreshOverviewActivity(): Promise<void> {
+    if (!sources.value.length || overviewActivity.value.length || overviewActivityLoading.value || loading.value) return
+    const version = ++overviewActivityVersion
+    const range = { ...bounds.value }
+    const models = [...sources.value]
+    overviewActivityLoading.value = true
+    overviewActivityError.value = null
+    try {
+      const results = await Promise.all(models.map(source => source.activity(range, 180)))
+      if (version !== overviewActivityVersion) return
+      const bins = timeBuckets(range, 180).map(bin => ({ ...bin, busyDuration: 0n }))
+      for (const result of results) for (const [index, bin] of result.entries()) bins[index]!.busyDuration += bin.busyDuration
+      overviewActivity.value = bins
+    } catch (error) { if (version === overviewActivityVersion) overviewActivityError.value = error instanceof Error ? error.message : String(error) }
+    finally { if (version === overviewActivityVersion) overviewActivityLoading.value = false }
+  }
+  watch([sources, overviewMetric, loading], ([models], [previousModels]) => {
+    if (models !== previousModels) {
+      overviewActivityVersion++
+      overviewActivity.value = []
+      overviewActivityLoading.value = false
+      overviewActivityError.value = null
+    }
+    if (overviewMetric.value === 'utilization') void refreshOverviewActivity()
+  })
   function removeSource(id: string): void {
     clock.pause()
     const model = sources.value.find(source => source.source.metadata.id === id)
@@ -402,5 +432,5 @@ export const useReplayStore = defineStore('replay', () => {
     notify('项目布局、书签、时钟偏移与播放位置已恢复')
   }
 
-  return { sources, computeModelId, sourceParserId, samples, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, loadSamples, importFiles, cancelImport, removeSource, seek, setViewport, stopZoom, setZoomPointer, fit, zoom, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
+  return { sources, computeModelId, sourceParserId, samples, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, loadSamples, importFiles, cancelImport, removeSource, seek, setViewport, stopZoom, setZoomPointer, fit, zoom, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
 })

@@ -14,6 +14,7 @@ export interface RawSpan extends TimeRange {
 }
 export interface EventPage { events: RawSpan[]; truncated: boolean }
 export interface DensityBin extends TimeRange { trackId: number; count: number }
+export interface ActivityBin extends TimeRange { busyDuration: bigint }
 export interface RangeStatistics { count: number; sumDuration: bigint; unionDuration: bigint }
 export interface TrackGroup { id: string; trackIds: number[] }
 export interface GroupStatistics extends RangeStatistics { groupId: string }
@@ -38,6 +39,7 @@ export interface ParsedTraceSource {
   density(query: EventQuery & { buckets: number }): Promise<DensityBin[]>
   statistics(query: EventQuery): Promise<RangeStatistics>
   groupedStatistics(range: TimeRange, groups: TrackGroup[]): Promise<GroupStatistics[]>
+  activity(range: TimeRange, groups: TrackGroup[], buckets: number): Promise<ActivityBin[]>
   search(text: string, limit?: number): Promise<RawSpan[]>
   boundary(time: bigint, direction: -1 | 1): Promise<bigint | null>
   args(argSetId: number): Promise<Record<string, string>>
@@ -75,6 +77,7 @@ export interface ReplayDataSource {
   density(query: EventQuery & { buckets: number }): Promise<ReplayDensity[]>
   statistics(query: EventQuery): Promise<RangeStatistics>
   cuStatistics(range: TimeRange): Promise<GroupStatistics[]>
+  activity(range: TimeRange, buckets: number): Promise<ActivityBin[]>
   search(text: string, limit?: number): Promise<ReplayEvent[]>
   boundary(time: bigint, direction: -1 | 1): Promise<bigint | null>
 }

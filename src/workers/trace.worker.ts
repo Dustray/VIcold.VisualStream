@@ -25,6 +25,7 @@ context.onmessage = (event: MessageEvent<{ id: number; method: string; payload: 
         else if (method === 'density') result = await source.density(payload as EventQuery & { buckets: number })
         else if (method === 'statistics') result = await source.statistics(payload as EventQuery)
         else if (method === 'groupedStatistics') { const query = payload as { range: TimeRange; groups: TrackGroup[] }; result = await source.groupedStatistics(query.range, query.groups) }
+        else if (method === 'activity') { const query = payload as { range: TimeRange; groups: TrackGroup[]; buckets: number }; result = await source.activity(query.range, query.groups, query.buckets) }
         else if (method === 'search') { const query = payload as { text: string; limit?: number }; result = await source.search(query.text, query.limit) }
         else if (method === 'args') result = await source.args(payload as number)
         else if (method === 'boundary') { const query = payload as { time: bigint; direction: -1 | 1 }; result = await source.boundary(query.time, query.direction) }

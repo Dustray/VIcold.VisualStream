@@ -29,10 +29,25 @@ const sourceForEvent = (sourceId: string) => store.sources.find(source => source
 const cuIndex = (cuId: string) => store.cus.find(cu => cu.id === cuId)?.index ?? '—'
 const totalBytes = computed(() => store.sources.reduce((total, source) => total + source.source.metadata.bytes, 0))
 let resizing = false
+const copyableSelector = '[data-copyable], .event-title h3, .detail-list dd, .source-footnote, .sidebar-info dd, .time-hero'
 
 async function filesSelected(event: Event): Promise<void> { const input = event.target as HTMLInputElement; const files = [...input.files ?? []]; input.value = ''; if (files.length) await store.importFiles(files) }
 async function projectSelected(event: Event): Promise<void> { const input = event.target as HTMLInputElement; const file = input.files?.[0]; input.value = ''; if (file) await store.openProject(file) }
-function drop(event: DragEvent): void { dragDepth.value = 0; const files = [...event.dataTransfer?.files ?? []]; if (files.length === 1 && files[0]!.name.endsWith('.json')) void store.openProject(files[0]!); else if (files.length) void store.importFiles(files) }
+function isFileDrag(event: DragEvent): boolean { return event.dataTransfer?.types.includes('Files') ?? false }
+function dragEnter(event: DragEvent): void { if (isFileDrag(event)) { event.preventDefault(); dragDepth.value++ } }
+function dragLeave(event: DragEvent): void { if (isFileDrag(event)) { event.preventDefault(); dragDepth.value = Math.max(0, dragDepth.value - 1) } }
+function dragOver(event: DragEvent): void {
+  if (isFileDrag(event)) { event.preventDefault(); event.dataTransfer!.dropEffect = 'copy' }
+  else if (!isTextTarget(event)) event.preventDefault()
+}
+function drop(event: DragEvent): void {
+  if (!isFileDrag(event)) { if (!isTextTarget(event)) event.preventDefault(); return }
+  event.preventDefault()
+  dragDepth.value = 0
+  const files = [...event.dataTransfer?.files ?? []]
+  if (files.length === 1 && files[0]!.name.endsWith('.json')) void store.openProject(files[0]!)
+  else if (files.length) void store.importFiles(files)
+}
 function changeSpeed(event: Event): void { const value = Number((event.target as HTMLSelectElement).value); if (Number.isFinite(value) && value > 0) store.clock.setSpeed(value) }
 function applyCustomSpeed(): void { try { store.clock.setSpeed(Number(customSpeed.value)); customSpeed.value = '' } catch (error) { store.notify(String(error), 'error') } }
 function seekInput(): void { const value = parseMilliseconds(timeInput.value); if (value === null) { store.notify('请输入毫秒时间，最多保留六位小数'); return }; store.seek(value); timeInput.value = '' }
@@ -40,12 +55,32 @@ function offsetChanged(sourceId: string, event: Event): void { const value = par
 function resizeStart(event: PointerEvent): void { resizing = true; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); document.body.style.cursor = 'row-resize'; event.preventDefault() }
 function resizeMove(event: PointerEvent): void { if (!resizing || !workspace.value) return; const bounds = workspace.value.getBoundingClientRect(); upperRatio.value = Math.max(28, Math.min(72, (event.clientY - bounds.top) / bounds.height * 100)) }
 function resizeEnd(): void { if (!resizing) return; resizing = false; document.body.style.cursor = ''; localStorage.setItem('visualstream.upperRatio', String(upperRatio.value)) }
-function isTextTarget(event: KeyboardEvent): boolean {
-  const target = event.target
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable || target.closest('textarea, [role="textbox"], [role="searchbox"]')) return true
+function eventElement(event: Event): Element | null { return event.target instanceof Element ? event.target : event.target instanceof Node ? event.target.parentElement : null }
+function isTextTarget(event: Event): boolean {
+  const target = eventElement(event)
+  if (!target) return false
+  if ((target instanceof HTMLElement && target.isContentEditable) || target.closest('textarea, [role="textbox"], [role="searchbox"]')) return true
   const input = target.closest('input')
   return input instanceof HTMLInputElement && !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'range', 'color', 'hidden'].includes(input.type)
+}
+function isCopyableTarget(event: Event): boolean { return !!eventElement(event)?.closest(copyableSelector) }
+function preventNativeSelection(event: Event): void { if (!isTextTarget(event) && !isCopyableTarget(event)) event.preventDefault() }
+function preventNativeDrag(event: DragEvent): void { if (!isTextTarget(event)) event.preventDefault() }
+function preventAutoScroll(event: MouseEvent): void { if (event.button === 1 && !isTextTarget(event)) event.preventDefault() }
+function preventPageZoom(event: WheelEvent): void { if (event.ctrlKey || event.metaKey) event.preventDefault() }
+function clearTextSelection(event: PointerEvent): void { if (!isTextTarget(event) && !isCopyableTarget(event)) window.getSelection()?.removeAllRanges() }
+function selectAll(event: KeyboardEvent): void {
+  if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'a' || event.isComposing || isTextTarget(event)) return
+  event.preventDefault()
+  const selection = window.getSelection()
+  const anchor = selection?.anchorNode
+  const target = eventElement(event)?.closest(copyableSelector)
+  const element = target ?? (anchor instanceof Element ? anchor : anchor?.parentElement)?.closest(copyableSelector)
+  if (!selection || !element) return
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  selection.removeAllRanges()
+  selection.addRange(range)
 }
 function spaceKeydown(event: KeyboardEvent): void {
   if (event.code !== 'Space' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || isTextTarget(event)) return
@@ -54,6 +89,7 @@ function spaceKeydown(event: KeyboardEvent): void {
   if (!event.repeat && !store.spaceHeld && store.sources.length && !store.loading) { store.spaceHeld = true; store.spaceUsed = false }
 }
 function keydown(event: KeyboardEvent): void {
+  selectAll(event)
   if (event.key === 'Escape') { modal.value = null; store.setSelection(null); return }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); searchInput.value?.focus(); return }
   if (isTextTarget(event) || modal.value || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
@@ -93,7 +129,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
 </script>
 
 <template>
-  <div class="app-shell" @dragenter.prevent="dragDepth++" @dragleave.prevent="dragDepth = Math.max(0, dragDepth - 1)" @dragover.prevent @drop.prevent="drop">
+  <div class="app-shell" spellcheck="false" @dragenter="dragEnter" @dragleave="dragLeave" @dragover="dragOver" @drop="drop" @dragstart="preventNativeDrag" @selectstart="preventNativeSelection" @contextmenu="preventNativeSelection" @mousedown="preventAutoScroll" @pointerdown="clearTextSelection" @wheel="preventPageZoom">
     <input ref="traceInput" class="sr-only" type="file" multiple accept=".perfetto-trace,.pftrace,.trace,.pb" data-testid="trace-input" @change="filesSelected" />
     <input ref="projectInput" class="sr-only" type="file" accept=".json" data-testid="project-input" @change="projectSelected" />
     <header class="app-header">
@@ -124,7 +160,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
       </aside>
 
       <main class="workspace">
-        <div class="workspace-toolbar"><div class="workspace-breadcrumb"><span>重放</span><ChevronRight :size="13" /><strong :title="sourceTitle">{{ sourceTitle }}</strong></div><label class="search-box"><Search :size="14" /><input ref="searchInput" v-model="store.searchText" placeholder="搜索任务或事件…" aria-label="搜索任务或事件" /><button v-if="store.searchText" class="icon-button" aria-label="清除搜索" @click="store.searchText = ''"><X :size="12" /></button><kbd v-else>Ctrl F</kbd></label></div>
+        <div class="workspace-toolbar"><div class="workspace-breadcrumb"><span>重放</span><ChevronRight :size="13" /><strong :title="sourceTitle">{{ sourceTitle }}</strong></div><label class="search-box"><Search :size="14" /><input ref="searchInput" v-model="store.searchText" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="搜索任务或事件…" aria-label="搜索任务或事件" /><button v-if="store.searchText" class="icon-button" aria-label="清除搜索" @click="store.searchText = ''"><X :size="12" /></button><kbd v-else>Ctrl F</kbd></label></div>
         <div ref="workspace" class="workspace-content">
           <div class="upper-workspace" :style="{ flexBasis: `${upperRatio}%` }">
             <section class="hardware-panel">
