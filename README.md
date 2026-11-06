@@ -69,7 +69,9 @@ git push origin v0.1.2
 
 工作流使用 Windows x64 环境、Node.js 24 与 Rust stable，按锁文件安装依赖并运行单元测试，然后通过现有 Tauri 构建入口准备 Perfetto 资源、执行类型检查、打包网页与 Release 客户端。npm、Rust 和 Perfetto 资源均有缓存。
 
-构建完成后，在对应运行页面的 **Artifacts** 中下载以下产物，保留 14 天：
+构建完成后，工作流会自动将独立客户端 `visualstream.exe`、NSIS 安装程序和网页压缩包 `visualstream-web.zip` 上传到对应 Release 的 **Assets**，正式版本与预发布版本均支持。
+
+对应运行页面的 **Artifacts** 同时保留以下产物，保留 14 天：
 
 | 产物名称 | 内容 |
 | --- | --- |
@@ -77,7 +79,7 @@ git push origin v0.1.2
 | `visualstream-windows-x64-installer` | Windows NSIS 安装程序 |
 | `visualstream-web` | `dist` 网页静态资源，包含 Perfetto Worker 与 WASM，可部署到 HTTP / HTTPS 静态站点 |
 
-无需额外配置仓库密钥。可在 **Actions → Build → 对应运行 → Artifacts** 下载构建产物。
+无需额外配置仓库密钥。上传使用 GitHub 自动提供的令牌，构建任务授予 `contents: write` 权限；重复执行时会替换该 Release 中的同名附件。日常下载使用 **Releases → 对应版本 → Assets**，也可在 **Actions → Build → 对应运行 → Artifacts** 下载构建产物。
 
 ## 已实现
 
