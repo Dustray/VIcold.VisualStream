@@ -18,28 +18,54 @@ let cellWidth = 65
 const cellHeight = 43
 const gap = 6
 const padding = 2
+const paintedCells = new Map<string, { name: string | undefined; count: number; selected: boolean }>()
+const labelWidths = new Map<string, number>()
+let paintedWidth = 0
+let paintedHeight = 0
+let paintedRatio = 0
+let paintedTheme = resolvedTheme.value
+let paintedDevice: DeviceResource | null = null
 
 function draw(): void {
   frame = 0
   const element = canvas.value
   if (!element || !wrapper.value) return
   const width = wrapper.value.clientWidth
+  if (width <= 0) return
   columns = Math.max(4, Math.min(16, Math.floor((width + gap) / 80)))
   cellWidth = (width - padding * 2 - gap * (columns - 1)) / columns
   const nextHeight = Math.ceil(props.device.cus.length / columns) * (cellHeight + gap) - gap + padding * 2
   height.value = nextHeight
   const ratio = Math.min(window.devicePixelRatio || 1, 2)
-  element.width = Math.round(width * ratio)
-  element.height = Math.round(nextHeight * ratio)
+  const targetWidth = Math.round(width * ratio)
+  const targetHeight = Math.round(nextHeight * ratio)
+  const repaint = paintedWidth !== width || paintedHeight !== nextHeight || paintedRatio !== ratio || paintedTheme !== resolvedTheme.value || paintedDevice !== props.device
+  if (element.width !== targetWidth || element.height !== targetHeight) { element.width = targetWidth; element.height = targetHeight }
   const context = element.getContext('2d')!
-  context.scale(ratio, ratio)
-  context.clearRect(0, 0, width, nextHeight)
+  context.setTransform(ratio, 0, 0, ratio, 0, 0)
+  if (repaint) { context.clearRect(0, 0, width, nextHeight); paintedCells.clear() }
+  paintedWidth = width
+  paintedHeight = nextHeight
+  paintedRatio = ratio
+  paintedTheme = resolvedTheme.value
+  paintedDevice = props.device
   for (const [index, cu] of props.device.cus.entries()) {
     const left = padding + (index % columns) * (cellWidth + gap)
     const top = padding + Math.floor(index / columns) * (cellHeight + gap)
     const events = store.activeByCu.get(cu.id) ?? []
-    const color = events.length ? eventColor(events[0]!.name) : themeColor('canvas-muted', '#465268')
     const selected = store.selectedCuId === cu.id
+    const name = events[0]?.name
+    const previous = paintedCells.get(cu.id)
+    if (previous && previous.name === name && previous.count === events.length && previous.selected === selected) continue
+    paintedCells.set(cu.id, { name, count: events.length, selected })
+    if (!repaint) {
+      const clearLeft = Math.floor((left - 2) * ratio)
+      const clearTop = Math.floor((top - 2) * ratio)
+      const clearRight = Math.ceil((left + cellWidth + 2) * ratio)
+      const clearBottom = Math.ceil((top + cellHeight + 2) * ratio)
+      context.clearRect(clearLeft / ratio, clearTop / ratio, (clearRight - clearLeft) / ratio, (clearBottom - clearTop) / ratio)
+    }
+    const color = events.length ? eventColor(events[0]!.name) : themeColor('canvas-muted', '#465268')
     context.fillStyle = events.length ? `${color}16` : themeColor('surface-raised', '#131923')
     context.strokeStyle = selected ? themeColor('accent', '#b0c6ff') : events.length ? `${color}55` : themeColor('border', '#252d3b')
     context.lineWidth = selected ? 1.6 : 1
@@ -58,7 +84,15 @@ function draw(): void {
     context.beginPath()
     context.rect(left + 7, top + 20, cellWidth - 13, 16)
     context.clip()
-    context.fillText(fitTimelineLabel(label, cellWidth - 15, text => context.measureText(text).width), left + 8, top + 32)
+    context.fillText(fitTimelineLabel(label, cellWidth - 15, text => {
+      let measured = labelWidths.get(text)
+      if (measured === undefined) {
+        measured = context.measureText(text).width
+        if (labelWidths.size >= 4096) labelWidths.clear()
+        labelWidths.set(text, measured)
+      }
+      return measured
+    }), left + 8, top + 32)
     context.restore()
     if (events.length > 1) { context.fillStyle = themeColor('surface-panel', '#10151f'); context.fillRect(left + cellWidth - 20, top + 4, 16, 12); context.fillStyle = themeColor('text-secondary', '#9daec8'); context.fillText(`+${events.length - 1}`, left + cellWidth - 18, top + 13) }
   }

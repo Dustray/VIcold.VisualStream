@@ -1,4 +1,4 @@
-import { computed, markRaw, ref, shallowRef, watch } from 'vue'
+import { computed, markRaw, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { ComputeModelRegistry } from '../core/registry'
 import { WorkerTraceSource } from '../core/worker-source'
@@ -10,6 +10,7 @@ import { forgetFile, readFileHistory, readHistoryFile, rememberFile, type Histor
 import { workspaceHost } from '../host'
 import type { ActivityBin, Bookmark, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
 import { IntervalIndex } from '../engine/interval-index'
+import { LatestQuery } from '../engine/latest-query'
 import { PlaybackClock } from '../engine/playback-clock'
 import { ViewportZoom } from '../engine/viewport-zoom'
 import { ViewportPan } from '../engine/viewport-pan'
@@ -71,7 +72,14 @@ export const useReplayStore = defineStore('replay', () => {
   let activeCache: { range: TimeRange; index: IntervalIndex<ReplayEvent> } | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
   let searchVersion = 0
-  let statisticsVersion = 0
+  const statisticsQuery = new LatestQuery<RangeStatistics>(result => {
+    selectionStats.value = result
+    statisticsLoading.value = false
+  }, error => {
+    notify(String(error), 'error')
+    statisticsLoading.value = false
+  })
+  onScopeDispose(() => statisticsQuery.cancel())
   let overviewVersion = 0
   let overviewActivityVersion = 0
 
@@ -132,7 +140,7 @@ export const useReplayStore = defineStore('replay', () => {
     searchResults.value = []
     searchText.value = ''
     searchVersion++
-    statisticsVersion++
+    statisticsQuery.cancel()
     overviewVersion++
     searching.value = false
     statisticsLoading.value = false
@@ -306,10 +314,14 @@ export const useReplayStore = defineStore('replay', () => {
     else reset()
   }
 
+  function publishActive(events: ReplayEvent[]): void {
+    const previous = activeEvents.value
+    if (previous.length !== events.length || events.some((event, index) => event !== previous[index])) activeEvents.value = events
+  }
   async function refreshActive(time: bigint, force = false): Promise<void> {
     if (!displayedSources.value.length || loading.value) return
-    if (time === bounds.value.end) { activeEvents.value = []; clock.setBuffering(false); return }
-    if (!force && activeCache && time >= activeCache.range.start && time < activeCache.range.end) { activeEvents.value = activeCache.index.at(time); return }
+    if (time === bounds.value.end) { publishActive([]); clock.setBuffering(false); return }
+    if (!force && activeCache && time >= activeCache.range.start && time < activeCache.range.end) { publishActive(activeCache.index.at(time)); return }
     activeTarget = time
     clock.setBuffering(true)
     if (activeLoading) return
@@ -326,7 +338,7 @@ export const useReplayStore = defineStore('replay', () => {
         if (generation !== activeGeneration || activeTarget !== null) continue
         if (pages.some(page => page.truncated)) throw new Error('活动窗口超过 25 万事件，请使用更小的记录或后续原生解析后端。')
         activeCache = { range, index: markRaw(new IntervalIndex(pages.flatMap(page => page.events))) }
-        activeEvents.value = activeCache.index.at(currentTime.value)
+        publishActive(activeCache.index.at(currentTime.value))
       }
     } catch (error) { clock.pause(); notify(error instanceof Error ? error.message : String(error), 'error') }
     finally { activeLoading = false; clock.setBuffering(false); if (activeTarget !== null && !loading.value) void refreshActive(activeTarget, true) }
@@ -360,11 +372,13 @@ export const useReplayStore = defineStore('replay', () => {
     const ratio = anchor === undefined ? zoomPointer ?? 0.5 : Number(anchor - viewport.value.start) / Number(duration(viewport.value))
     viewportZoom.zoom(factor, ratio)
   }
-  function zoomSelection(): void {
-    const range = selection.value ?? (selectedEvent.value ? { start: selectedEvent.value.start, end: selectedEvent.value.end } : null)
-    if (!range) return
+  function zoomToRange(range: TimeRange): void {
     const margin = duration(range) / 10n || 100n
     setViewport({ start: range.start - margin, end: range.end + margin })
+  }
+  function zoomSelection(): void {
+    const range = selection.value ?? selectedEvent.value
+    if (range) zoomToRange(range)
   }
   async function selectEvent(event: ReplayEvent): Promise<void> {
     selectedEvent.value = event
@@ -401,9 +415,20 @@ export const useReplayStore = defineStore('replay', () => {
   }
   function setSelection(range: TimeRange | null): void {
     const clipped = range ? { start: clampTime(range.start, bounds.value), end: clampTime(range.end, bounds.value) } : null
-    selection.value = clipped && clipped.end > clipped.start ? clipped : null
+    const next = clipped && clipped.end > clipped.start ? clipped : null
+    if (selection.value?.start === next?.start && selection.value?.end === next?.end) return
+    selection.value = next
     if (!selection.value) looping.value = false
     clock.setLoop(looping.value ? selection.value : null)
+  }
+  function playSelection(): void {
+    const range = selection.value
+    if (!range || loading.value || !displayedSources.value.length) return
+    clock.pause()
+    looping.value = true
+    clock.setLoop(range)
+    seek(range.start)
+    clock.play()
   }
   function toggleLoop(): void { if (!selection.value) { notify('先拖动框选一个时间区间'); return }; looping.value = !looping.value; clock.setLoop(looping.value ? selection.value : null) }
   function addBookmark(): void { bookmarks.value = [...bookmarks.value, { id: crypto.randomUUID(), time: currentTime.value, label: `标记 ${bookmarks.value.length + 1}` }]; notify(`已标记 ${formatTime(currentTime.value)}`) }
@@ -442,17 +467,16 @@ export const useReplayStore = defineStore('replay', () => {
       finally { if (version === searchVersion) searching.value = false }
     }, 200)
   })
-  watch([selection, displayedSources], async ([range]) => {
-    const version = ++statisticsVersion
+  watch([selection, displayedSources], ([range, sources]) => {
+    statisticsQuery.cancel()
     selectionStats.value = null
-    if (!range) { statisticsLoading.value = false; return }
+    if (!range || !sources.length) { statisticsLoading.value = false; return }
     statisticsLoading.value = true
-    try {
-      const results = await Promise.all(displayedSources.value.map(source => source.statistics(range)))
-      if (version === statisticsVersion) selectionStats.value = { count: results.reduce((result, item) => result + item.count, 0), sumDuration: results.reduce((result, item) => result + item.sumDuration, 0n), unionDuration: results.length === 1 ? results[0]!.unionDuration : -1n }
-    } catch (error) { if (version === statisticsVersion) notify(String(error), 'error') }
-    finally { if (version === statisticsVersion) statisticsLoading.value = false }
-  })
+    statisticsQuery.schedule(async () => {
+      const results = await Promise.all(sources.map(source => source.statistics(range)))
+      return { count: results.reduce((result, item) => result + item.count, 0), sumDuration: results.reduce((result, item) => result + item.sumDuration, 0n), unionDuration: results.length === 1 ? results[0]!.unionDuration : -1n }
+    })
+  }, { flush: 'sync' })
 
   function snapshot(): ProjectSnapshot {
     return { version: 1, computeModel: { id: 'megakernel', version: '1' }, sources: sources.value.map(model => ({ filename: model.source.metadata.filename, fingerprint: model.source.metadata.fingerprint, parser: { id: 'perfetto', version: '1' }, offset: model.offset.toString() })), visibleSources: selectedSources.value.map(source => source.source.metadata.fingerprint), time: currentTime.value.toString(), speed: speed.value, viewport: { start: viewport.value.start.toString(), end: viewport.value.end.toString() }, selection: selection.value ? { start: selection.value.start.toString(), end: selection.value.end.toString() } : null, loop: looping.value, bookmarks: bookmarks.value.map(bookmark => ({ ...bookmark, time: bookmark.time.toString() })) }
@@ -509,5 +533,5 @@ export const useReplayStore = defineStore('replay', () => {
     notify('项目布局、书签、时钟偏移与播放位置已恢复')
   }
 
-  return { sources, timelineFocus, focusSource, computeModelId, sourceParserId, historyFiles, historyLoading, selectedSourceIds, selectedSources, displayedSources, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, toggleSource, selectAllSources, openHistory, removeHistory, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
+  return { sources, timelineFocus, focusSource, computeModelId, sourceParserId, historyFiles, historyLoading, selectedSourceIds, selectedSources, displayedSources, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, toggleSource, selectAllSources, openHistory, removeHistory, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomToRange, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, playSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
 })

@@ -42,6 +42,8 @@ let height = 280
 let observer: ResizeObserver | null = null
 let drawFrame = 0
 let overlayFrame = 0
+let overviewBase: HTMLCanvasElement | null = null
+let overviewKey: unknown[] = []
 let queryFrame = 0
 let queryRunning = false
 let queryRequested = false
@@ -256,7 +258,6 @@ function draw(): void {
   }
   canvas.strokeStyle = themeColor('border-strong', '#303b50'); canvas.beginPath(); canvas.moveTo(gutter - 0.5, 0); canvas.lineTo(gutter - 0.5, height); canvas.stroke()
   canvas.strokeStyle = themeColor('border', '#2a3446'); canvas.beginPath(); canvas.moveTo(0, ruler - 0.5); canvas.lineTo(width, ruler - 0.5); canvas.stroke()
-  drawOverview()
 }
 
 function drawOverlay(): void {
@@ -281,10 +282,7 @@ function drawOverlay(): void {
   drawOverview()
 }
 
-function drawOverview(): void {
-  if (!overviewCanvas.value) return
-  const canvasWidth = overviewCanvas.value.clientWidth
-  const canvas = context(overviewCanvas.value, canvasWidth, 34)
+function drawOverviewBase(canvas: CanvasRenderingContext2D, canvasWidth: number): void {
   canvas.fillStyle = themeColor('canvas-background', '#101620'); canvas.fillRect(0, 0, canvasWidth, 34)
   const chartWidth = Math.max(1, canvasWidth - gutter - 13)
   const full = Number(duration(store.bounds))
@@ -307,6 +305,22 @@ function drawOverview(): void {
       canvas.fillRect(gutter + index * chartWidth / values.length, 27 - barHeight, Math.max(1, chartWidth / values.length - 1), barHeight)
     }
   }
+}
+
+function drawOverview(): void {
+  if (!overviewCanvas.value) return
+  const canvasWidth = overviewCanvas.value.clientWidth
+  if (canvasWidth <= 0) return
+  const nextKey = [canvasWidth, Math.min(devicePixelRatio || 1, 2), resolvedTheme.value, store.overviewMetric, store.overview, store.overviewActivity, store.bounds.start, store.bounds.end, store.cus.length]
+  if (!overviewBase || nextKey.some((value, index) => value !== overviewKey[index])) {
+    overviewBase ??= document.createElement('canvas')
+    drawOverviewBase(context(overviewBase, canvasWidth, 34), canvasWidth)
+    overviewKey = nextKey
+  }
+  const canvas = context(overviewCanvas.value, canvasWidth, 34)
+  canvas.drawImage(overviewBase, 0, 0, canvasWidth, 34)
+  const chartWidth = Math.max(1, canvasWidth - gutter - 13)
+  const full = Number(duration(store.bounds))
   const left = gutter + Number(store.viewport.start - store.bounds.start) / full * chartWidth
   const right = gutter + Number(store.viewport.end - store.bounds.start) / full * chartWidth
   canvas.fillStyle = themeColor('selection-fill', '#9bbdff0d'); canvas.fillRect(left, 3, right - left, 27)

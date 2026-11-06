@@ -4,6 +4,7 @@ import { Info, LoaderCircle } from 'lucide-vue-next'
 import { duration, formatTime } from '../core/time'
 import type { GroupStatistics, TimeRange } from '../core/types'
 import { summarizeCuUtilization } from '../engine/cu-utilization'
+import { LatestQuery } from '../engine/latest-query'
 import { useReplayStore } from '../stores/replay'
 
 const store = useReplayStore()
@@ -24,8 +25,14 @@ const items = computed(() => {
 })
 const selected = computed(() => report.value?.items.find(item => item.cuId === store.selectedCuId))
 const cache = new Map<string, GroupStatistics[]>()
-let timer: ReturnType<typeof setTimeout> | null = null
-let generation = 0
+const query = new LatestQuery<{ period: TimeRange; values: GroupStatistics[] }>(result => {
+  resolvedRange.value = result.period
+  statistics.value = result.values
+  loading.value = false
+}, failure => {
+  error.value = failure instanceof Error ? failure.message : String(failure)
+  loading.value = false
+})
 
 function percent(ratio: number | null | undefined): string { return ratio === null || ratio === undefined ? '—' : `${(ratio * 100).toFixed(2)}%` }
 function deviceLabel(id: string): string {
@@ -33,36 +40,29 @@ function deviceLabel(id: string): string {
   return device ? `${device.label}${device.rank === null ? '' : ` · Rank ${device.rank}`}` : ''
 }
 function refresh(): void {
-  const version = ++generation
-  if (timer) clearTimeout(timer)
+  query.cancel()
   statistics.value = null
   error.value = ''
   loading.value = !!store.displayedSources.length
   if (!store.displayedSources.length) return
   const period = { ...range.value }
   const queries = store.displayedSources.map(source => ({ source, key: `${source.source.metadata.id}:${source.offset}:${period.start}:${period.end}` }))
-  timer = setTimeout(async () => {
-    timer = null
-    try {
-      const values = await Promise.all(queries.map(async ({ source, key }) => {
-        const cached = cache.get(key)
-        if (cached) return cached
-        const result = await source.cuStatistics(period)
-        cache.set(key, result)
-        if (cache.size > 16) cache.delete(cache.keys().next().value!)
-        return result
-      }))
-      if (version !== generation) return
-      resolvedRange.value = period
-      statistics.value = values.flat()
-    } catch (failure) { if (version === generation) error.value = failure instanceof Error ? failure.message : String(failure) }
-    finally { if (version === generation) loading.value = false }
+  query.schedule(async () => {
+    const values = await Promise.all(queries.map(async ({ source, key }) => {
+      const cached = cache.get(key)
+      if (cached) return cached
+      const result = await source.cuStatistics(period)
+      cache.set(key, result)
+      if (cache.size > 16) cache.delete(cache.keys().next().value!)
+      return result
+    }))
+    return { period, values: values.flat() }
   }, 180)
 }
 
 watch(() => store.selection, value => { scope.value = value ? 'selection' : 'full' })
 watch([() => store.displayedSources, range], refresh, { immediate: true })
-onBeforeUnmount(() => { generation++; if (timer) clearTimeout(timer) })
+onBeforeUnmount(() => query.cancel())
 </script>
 
 <template>

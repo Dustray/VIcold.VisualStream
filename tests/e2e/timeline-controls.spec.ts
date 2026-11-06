@@ -287,6 +287,56 @@ test('operator clicks seek to the pointer time, left drag selects, and right dra
   expect(errors).toEqual([])
 })
 
+test('locating a CU event uses the event range while preserving an existing selection', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await ready(page)
+  await page.getByRole('textbox', { name: '搜索任务或事件' }).fill('TASK_RMS_NORM')
+  await expect(page.locator('.search-result').first()).toBeVisible()
+  await page.locator('.search-result').first().click()
+  await page.getByRole('button', { name: '定位到此事件' }).click()
+  const eventView = await project(page)
+  const name = await page.locator('.event-title h3').innerText()
+  const cu = Number((await page.locator('.event-tags span').nth(1).innerText()).match(/CU\s+(\d+)/)?.[1])
+  expect(Number.isFinite(cu)).toBe(true)
+  await page.getByRole('button', { name: '适配全部时间', exact: true }).click()
+  await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
+  const timeline = (await page.locator('.timeline-overlay').boundingBox())!
+  const plot = timeline.width - 183
+  await page.mouse.move(timeline.x + 170 + plot * 0.6, timeline.y + 92)
+  await page.mouse.down()
+  await page.mouse.move(timeline.x + 170 + plot * 0.8, timeline.y + 92, { steps: 8 })
+  await page.mouse.up()
+  const selected = await project(page)
+  expect(selected.selection).not.toBeNull()
+  expect(BigInt(selected.selection!.start)).toBeGreaterThan(BigInt(eventView.viewport.end))
+
+  const grid = page.locator('.cu-grid-canvas')
+  const gridWidth = await grid.evaluate(element => element.clientWidth)
+  const columns = Math.max(4, Math.min(16, Math.floor((gridWidth + 6) / 80)))
+  const cellWidth = (gridWidth - 4 - 6 * (columns - 1)) / columns
+  const position = { x: 2 + cu % columns * (cellWidth + 6) + 20, y: 2 + Math.floor(cu / columns) * 49 + 20 }
+  await grid.click({ position })
+  await expect(page.getByRole('button', { name: '定位到此事件' })).toHaveCount(0)
+  await grid.click({ position })
+  await expect(page.locator('.event-title h3')).toHaveText(name)
+  await page.getByRole('button', { name: '定位到此事件' }).click()
+  const located = await project(page)
+  expect(located.viewport).toEqual(eventView.viewport)
+  expect(located.time).toBe(eventView.time)
+  expect(located.selection).toEqual(selected.selection)
+
+  await page.locator('.inspector-tabs').getByRole('button', { name: '选区', exact: true }).click()
+  await page.locator('.inspector').getByRole('button', { name: '缩放到选区', exact: true }).click()
+  const selectionView = await project(page)
+  expect(selectionView.selection).toEqual(selected.selection)
+  expect(BigInt(selectionView.viewport.start)).toBeLessThanOrEqual(BigInt(selected.selection!.start))
+  expect(BigInt(selectionView.viewport.end)).toBeGreaterThanOrEqual(BigInt(selected.selection!.end))
+  expect(selectionView.viewport).not.toEqual(eventView.viewport)
+  expect(selectionView.time).toBe(eventView.time)
+  expect(errors).toEqual([])
+})
+
 test('WASD, slow speeds and global Space work with control focus while text inputs keep normal typing', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
