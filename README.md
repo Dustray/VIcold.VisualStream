@@ -51,6 +51,34 @@ npm run desktop:build
 
 `npm run build` 仍只输出浏览器网站，`npm run desktop:build` 输出桌面安装包，两个入口互不替代。桌面版当前继续使用同一套 Perfetto WASM 解析与 256 MB 单文件限制；原生 Trace Processor 和大文件后端后续独立接入。
 
+## GitHub Actions 自动构建
+
+[构建工作流](.github/workflows/build.yml) 仅在推送 `v` 开头的标签时运行，例如 `v0.1.0`。
+
+首次启用时，先将工作流提交并推送，再创建指向该提交的新标签。标签所指向的提交必须包含 `.github/workflows/build.yml`，仅在本地新增工作流文件无法触发构建。例如：
+
+```sh
+git add .github/workflows/build.yml README.md
+git commit -m "Add tag-triggered GitHub Actions builds"
+git push origin master
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+示例标签 `v0.1.1` 应替换为尚未使用的版本号。已有标签仍指向原来的提交，不会随分支更新而自动移动；再次推送未改变的标签不会触发新构建。
+
+工作流使用 Windows x64 环境、Node.js 24 与 Rust stable，按锁文件安装依赖并运行单元测试，然后通过现有 Tauri 构建入口准备 Perfetto 资源、执行类型检查、打包网页与 Release 客户端。npm、Rust 和 Perfetto 资源均有缓存。
+
+构建完成后，在对应运行页面的 **Artifacts** 中下载以下产物，保留 14 天：
+
+| 产物名称 | 内容 |
+| --- | --- |
+| `visualstream-windows-x64` | 独立运行的 `visualstream.exe` |
+| `visualstream-windows-x64-installer` | Windows NSIS 安装程序 |
+| `visualstream-web` | `dist` 网页静态资源，包含 Perfetto Worker 与 WASM，可部署到 HTTP / HTTPS 静态站点 |
+
+无需额外配置仓库密钥。可在 **Actions → Build → 对应运行 → Artifacts** 下载构建产物。
+
 ## 已实现
 
 - 独立配置计算模式与文件解析器；当前只有 Megakernel 模式和 Perfetto 解析器，支持自动识别。
