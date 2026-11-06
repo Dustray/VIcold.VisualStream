@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Crosshair, Expand, Focus, LoaderCircle, Minus, Plus } from 'lucide-vue-next'
-import { duration, eventColor, formatTime } from '../core/time'
+import { duration, formatTime } from '../core/time'
+import { operatorColor as eventColor, operatorOpacity, resolvedTheme, themeColor } from '../core/theme'
 import type { ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
 import { useReplayStore } from '../stores/replay'
 import { TimelineCache, type TimelineRequest, type TimelineTrackData } from '../engine/timeline-cache'
+import { ScrollMotion } from '../engine/scroll-motion'
+import { fitTimelineLabel } from '../engine/timeline-label'
 
 const store = useReplayStore()
 const viewportElement = ref<HTMLDivElement | null>(null)
@@ -45,6 +48,29 @@ let queryRequested = false
 let disposed = false
 let queryVersion = 0
 let data = new Map<string, TimelineTrackData>()
+const verticalMotion = new ScrollMotion(
+  () => scroller.value?.scrollTop ?? 0,
+  () => scroller.value ? scroller.value.scrollHeight - scroller.value.clientHeight : 0,
+  position => { if (scroller.value) { scroller.value.scrollTop = position; scroll() } },
+)
+const labelWidths = new Map<string, number>()
+function stopMotion(): void { store.stopPan(); verticalMotion.cancel() }
+function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number, right: number, top: number): void {
+  if (right - left < 17) return
+  canvas.font = '11px "Segoe UI", sans-serif'
+  const label = fitTimelineLabel(name.replace('TASK_', ''), right - left - 8, text => {
+    let width = labelWidths.get(text)
+    if (width === undefined) {
+      width = canvas.measureText(text).width
+      if (labelWidths.size >= 4096) labelWidths.clear()
+      labelWidths.set(text, width)
+    }
+    return width
+  })
+  if (!label) return
+  canvas.save(); canvas.beginPath(); canvas.rect(left + 3, top + 5, right - left - 6, rowHeight - 10); canvas.clip()
+  canvas.fillStyle = themeColor('operator-ink', '#111824'); canvas.fillText(label, left + 4, top + 14); canvas.restore()
+}
 const cache = new TimelineCache()
 const overviewTracks = computed(() => {
   const tracks = new Map<string, ReplayDensity[]>()
@@ -145,13 +171,13 @@ function draw(): void {
   width = viewportElement.value.clientWidth
   height = viewportElement.value.clientHeight
   const canvas = context(background.value, width, height)
-  canvas.fillStyle = '#0e131c'
+  canvas.fillStyle = themeColor('canvas-background', '#0e131c')
   canvas.fillRect(0, 0, width, height)
-  canvas.fillStyle = '#121925'
+  canvas.fillStyle = themeColor('canvas-panel', '#121925')
   canvas.fillRect(0, 0, gutter, height)
-  canvas.fillStyle = '#121925'
+  canvas.fillStyle = themeColor('canvas-panel', '#121925')
   canvas.fillRect(0, 0, width, ruler)
-  canvas.font = '10px "Segoe UI", sans-serif'
+  canvas.font = '11px "Segoe UI", sans-serif'
   canvas.textBaseline = 'middle'
   const ideal = Number(duration(store.viewport)) / Math.max(2, plotWidth() / 130)
   const power = 10 ** Math.floor(Math.log10(Math.max(1, ideal)))
@@ -162,13 +188,13 @@ function draw(): void {
   canvas.beginPath(); canvas.rect(gutter, 0, plotWidth(), height); canvas.clip()
   for (; tick <= store.viewport.end; tick += step) {
     const horizontal = Math.round(toX(tick)) + 0.5
-    canvas.strokeStyle = '#222b3b'
+    canvas.strokeStyle = themeColor('canvas-grid', '#222b3b')
     canvas.setLineDash([2, 4]); canvas.beginPath(); canvas.moveTo(horizontal, ruler); canvas.lineTo(horizontal, height); canvas.stroke(); canvas.setLineDash([])
-    canvas.fillStyle = '#8290a6'; canvas.fillText(formatTime(tick, 1), horizontal + 6, 15)
-    canvas.strokeStyle = '#354055'; canvas.beginPath(); canvas.moveTo(horizontal, ruler - 5); canvas.lineTo(horizontal, ruler); canvas.stroke()
+    canvas.fillStyle = themeColor('canvas-muted', '#8290a6'); canvas.fillText(formatTime(tick, 1), horizontal + 6, 15)
+    canvas.strokeStyle = themeColor('border-strong', '#354055'); canvas.beginPath(); canvas.moveTo(horizontal, ruler - 5); canvas.lineTo(horizontal, ruler); canvas.stroke()
   }
   canvas.restore()
-  canvas.fillStyle = '#77869e'; canvas.fillText('资源 / 原始轨道', 15, 15)
+  canvas.fillStyle = themeColor('canvas-muted', '#77869e'); canvas.fillText('资源 / 原始轨道', 15, 15)
   hits = []
   const visible = visibleRows()
   for (const row of visible) {
@@ -177,15 +203,15 @@ function draw(): void {
     if (top < ruler - rowHeight || top > height) continue
     canvas.save(); canvas.beginPath(); canvas.rect(0, ruler, width, height - ruler); canvas.clip()
     const selected = row.cuId === store.selectedCuId
-    if (row.kind === 'device') { canvas.fillStyle = '#19212e'; canvas.fillRect(0, top, width, rowHeight) }
-    else if (selected) { canvas.fillStyle = '#8cafff0d'; canvas.fillRect(0, top, width, rowHeight) }
-    canvas.strokeStyle = '#202735'; canvas.beginPath(); canvas.moveTo(0, top + rowHeight - 0.5); canvas.lineTo(width, top + rowHeight - 0.5); canvas.stroke()
-    canvas.fillStyle = selected ? '#c0d2ff' : row.kind === 'device' ? '#b5c1d3' : '#9caac0'
-    canvas.font = `${row.kind === 'device' ? '600 ' : ''}10px "Segoe UI", sans-serif`
+    if (row.kind === 'device') { canvas.fillStyle = themeColor('surface-raised', '#19212e'); canvas.fillRect(0, top, width, rowHeight) }
+    else if (selected) { canvas.fillStyle = themeColor('selection-fill', '#8cafff0d'); canvas.fillRect(0, top, width, rowHeight) }
+    canvas.strokeStyle = themeColor('canvas-grid', '#202735'); canvas.beginPath(); canvas.moveTo(0, top + rowHeight - 0.5); canvas.lineTo(width, top + rowHeight - 0.5); canvas.stroke()
+    canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : row.kind === 'device' ? themeColor('canvas-label', '#b5c1d3') : themeColor('canvas-label', '#9caac0')
+    canvas.font = `${row.kind === 'device' ? '600 ' : ''}11px "Segoe UI", sans-serif`
     canvas.save(); canvas.beginPath(); canvas.rect(0, top, gutter - 4, rowHeight); canvas.clip()
-    if (row.kind === 'group') { canvas.fillStyle = '#64738b'; canvas.fillText(store.expandedGroups.has(row.id) ? '▾' : '▸', 12, top + 14); canvas.fillStyle = selected ? '#c0d2ff' : '#a1afc3' }
+    if (row.kind === 'group') { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(store.expandedGroups.has(row.id) ? '▾' : '▸', 12, top + 14); canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : themeColor('canvas-label', '#a1afc3') }
     canvas.fillText(row.label, row.kind === 'track' ? 29 : row.kind === 'device' ? 13 : 26, top + 14)
-    canvas.fillStyle = '#596b86'; canvas.font = '9px "Segoe UI", sans-serif'; canvas.textAlign = 'right'; canvas.fillText(row.subtitle, gutter - 13, top + 14); canvas.textAlign = 'left'
+    canvas.fillStyle = themeColor('canvas-muted', '#596b86'); canvas.font = '11px "Segoe UI", sans-serif'; canvas.textAlign = 'right'; canvas.fillText(row.subtitle, gutter - 13, top + 14); canvas.textAlign = 'left'
     canvas.restore()
     if (row.kind !== 'device') {
       canvas.save(); canvas.beginPath(); canvas.rect(gutter, top + 2, plotWidth(), rowHeight - 4); canvas.clip()
@@ -195,15 +221,20 @@ function draw(): void {
       for (const bin of bins) {
         const bucket = Math.floor((toX(bin.start) - gutter) / 3)
         const existing = merged.get(bucket)
-        if (existing) { existing.count += bin.count; if (bin.end > existing.end) existing.end = bin.end }
+        if (existing) {
+          existing.count += bin.count
+          if ((bin.representativeDuration ?? 0n) > (existing.representativeDuration ?? 0n)) { existing.name = bin.name; existing.representativeDuration = bin.representativeDuration }
+          if (bin.end > existing.end) existing.end = bin.end
+        }
         else merged.set(bucket, { ...bin })
       }
       for (const bin of merged.values()) {
         const left = Math.max(gutter, toX(bin.start))
         const right = Math.min(width - 13, toX(bin.end))
         if (right < gutter || left > width) continue
-        canvas.fillStyle = selected ? `rgba(135, 174, 244, ${Math.min(0.9, 0.27 + Math.log2(bin.count + 1) * 0.13)})` : `rgba(103, 136, 190, ${Math.min(0.86, 0.2 + Math.log2(bin.count + 1) * 0.13)})`
-        canvas.fillRect(left, top + 7, Math.max(2, right - left - 0.5), rowHeight - 14)
+        canvas.fillStyle = `${eventColor(bin.name ?? '')}${operatorOpacity(selected)}`
+        canvas.fillRect(left, top + 5, Math.max(2, right - left - 0.5), rowHeight - 10)
+        if (bin.name) drawLabel(canvas, bin.name, left, right, top)
         hits.push({ bin, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
       }
       const events = tracks.flatMap(track => track.events).filter(event => event.start < store.viewport.end && event.end > store.viewport.start).sort((left, right) => Number((right.end - right.start) - (left.end - left.start)))
@@ -213,18 +244,18 @@ function draw(): void {
         if (right < gutter || left > width) continue
         const chosen = event.id === store.selectedEvent?.id && event.sourceId === store.selectedEvent.sourceId
         const color = eventColor(event.name)
-        canvas.fillStyle = `${color}${chosen ? 'e0' : 'b0'}`
+        canvas.fillStyle = `${color}${operatorOpacity(chosen)}`
         canvas.beginPath(); canvas.roundRect(left, top + 5, Math.max(1, right - left - 1), rowHeight - 10, 2); canvas.fill()
-        if (chosen) { canvas.strokeStyle = '#eff5ff'; canvas.stroke() }
-        if (right - left > 65) { canvas.save(); canvas.beginPath(); canvas.rect(left + 3, top + 5, right - left - 7, rowHeight - 10); canvas.clip(); canvas.fillStyle = '#111824'; canvas.font = '9px "Segoe UI", sans-serif'; canvas.fillText(event.name.replace('TASK_', ''), left + 5, top + 14); canvas.restore() }
+        if (chosen) { canvas.strokeStyle = themeColor('accent', '#eff5ff'); canvas.stroke() }
+        drawLabel(canvas, event.name, left, right, top)
         hits.push({ event, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
       }
       canvas.restore()
     }
     canvas.restore()
   }
-  canvas.strokeStyle = '#303b50'; canvas.beginPath(); canvas.moveTo(gutter - 0.5, 0); canvas.lineTo(gutter - 0.5, height); canvas.stroke()
-  canvas.strokeStyle = '#2a3446'; canvas.beginPath(); canvas.moveTo(0, ruler - 0.5); canvas.lineTo(width, ruler - 0.5); canvas.stroke()
+  canvas.strokeStyle = themeColor('border-strong', '#303b50'); canvas.beginPath(); canvas.moveTo(gutter - 0.5, 0); canvas.lineTo(gutter - 0.5, height); canvas.stroke()
+  canvas.strokeStyle = themeColor('border', '#2a3446'); canvas.beginPath(); canvas.moveTo(0, ruler - 0.5); canvas.lineTo(width, ruler - 0.5); canvas.stroke()
   drawOverview()
 }
 
@@ -236,16 +267,16 @@ function drawOverlay(): void {
   if (store.selection) {
     const left = toX(store.selection.start)
     const right = toX(store.selection.end)
-    canvas.fillStyle = '#93b5ff18'; canvas.fillRect(left, ruler, right - left, height - ruler)
-    canvas.strokeStyle = '#9abafa8a'; canvas.setLineDash([4, 3]); canvas.strokeRect(left + 0.5, ruler, right - left, height - ruler); canvas.setLineDash([])
+    canvas.fillStyle = themeColor('selection-fill', '#93b5ff18'); canvas.fillRect(left, ruler, right - left, height - ruler)
+    canvas.strokeStyle = themeColor('selection-stroke', '#9abafa8a'); canvas.setLineDash([4, 3]); canvas.strokeRect(left + 0.5, ruler, right - left, height - ruler); canvas.setLineDash([])
   }
   for (const bookmark of store.bookmarks) {
     const horizontal = toX(bookmark.time)
-    canvas.fillStyle = '#e1b77d'; canvas.beginPath(); canvas.moveTo(horizontal, 2); canvas.lineTo(horizontal + 4, 6); canvas.lineTo(horizontal, 10); canvas.lineTo(horizontal - 4, 6); canvas.closePath(); canvas.fill()
+    canvas.fillStyle = themeColor('warning', '#e1b77d'); canvas.beginPath(); canvas.moveTo(horizontal, 2); canvas.lineTo(horizontal + 4, 6); canvas.lineTo(horizontal, 10); canvas.lineTo(horizontal - 4, 6); canvas.closePath(); canvas.fill()
   }
   const playhead = Math.round(toX(store.currentTime)) + 0.5
-  canvas.strokeStyle = '#c0d3ff'; canvas.lineWidth = 1; canvas.beginPath(); canvas.moveTo(playhead, 8); canvas.lineTo(playhead, height); canvas.stroke()
-  canvas.fillStyle = '#c0d3ff'; canvas.beginPath(); canvas.moveTo(playhead - 5, 0); canvas.lineTo(playhead + 5, 0); canvas.lineTo(playhead + 5, 5); canvas.lineTo(playhead, 10); canvas.lineTo(playhead - 5, 5); canvas.closePath(); canvas.fill()
+  canvas.strokeStyle = themeColor('accent', '#c0d3ff'); canvas.lineWidth = 1; canvas.beginPath(); canvas.moveTo(playhead, 8); canvas.lineTo(playhead, height); canvas.stroke()
+  canvas.fillStyle = themeColor('accent', '#c0d3ff'); canvas.beginPath(); canvas.moveTo(playhead - 5, 0); canvas.lineTo(playhead + 5, 0); canvas.lineTo(playhead + 5, 5); canvas.lineTo(playhead, 10); canvas.lineTo(playhead - 5, 5); canvas.closePath(); canvas.fill()
   canvas.restore()
   drawOverview()
 }
@@ -254,39 +285,40 @@ function drawOverview(): void {
   if (!overviewCanvas.value) return
   const canvasWidth = overviewCanvas.value.clientWidth
   const canvas = context(overviewCanvas.value, canvasWidth, 34)
-  canvas.fillStyle = '#101620'; canvas.fillRect(0, 0, canvasWidth, 34)
+  canvas.fillStyle = themeColor('canvas-background', '#101620'); canvas.fillRect(0, 0, canvasWidth, 34)
   const chartWidth = Math.max(1, canvasWidth - gutter - 13)
   const full = Number(duration(store.bounds))
   if (store.overviewMetric === 'utilization') {
-    canvas.strokeStyle = '#36544a66'; canvas.beginPath(); canvas.moveTo(gutter, 7); canvas.lineTo(gutter + chartWidth, 7); canvas.moveTo(gutter, 17); canvas.lineTo(gutter + chartWidth, 17); canvas.stroke()
+    canvas.strokeStyle = themeColor('canvas-grid', '#36544a66'); canvas.beginPath(); canvas.moveTo(gutter, 7); canvas.lineTo(gutter + chartWidth, 7); canvas.moveTo(gutter, 17); canvas.lineTo(gutter + chartWidth, 17); canvas.stroke()
     for (const bin of store.overviewActivity) {
       const capacity = (bin.end - bin.start) * BigInt(store.cus.length)
       const ratio = capacity > 0n ? Math.max(0, Math.min(1, Number(bin.busyDuration) / Number(capacity))) : 0
       const left = gutter + Number(bin.start - store.bounds.start) / full * chartWidth
       const barWidth = Number(bin.end - bin.start) / full * chartWidth
-      canvas.fillStyle = '#439c86'; canvas.fillRect(left, 27 - ratio * 20, Math.max(1, barWidth - 1), ratio * 20)
+      canvas.fillStyle = themeColor('success', '#439c86'); canvas.fillRect(left, 27 - ratio * 20, Math.max(1, barWidth - 1), ratio * 20)
     }
   } else {
     const values = new Array<number>(180).fill(0)
     for (const bin of store.overview) { const index = Math.max(0, Math.min(179, Math.floor(Number(bin.start - store.bounds.start) / full * 180))); values[index]! += bin.count }
     const maximum = Math.max(1, ...values)
     for (const [index, value] of values.entries()) {
-      canvas.fillStyle = '#415d88'
+      canvas.fillStyle = themeColor('accent', '#415d88')
       const barHeight = Math.log1p(value) / Math.log1p(maximum) * 20
       canvas.fillRect(gutter + index * chartWidth / values.length, 27 - barHeight, Math.max(1, chartWidth / values.length - 1), barHeight)
     }
   }
   const left = gutter + Number(store.viewport.start - store.bounds.start) / full * chartWidth
   const right = gutter + Number(store.viewport.end - store.bounds.start) / full * chartWidth
-  canvas.fillStyle = '#9bbdff0d'; canvas.fillRect(left, 3, right - left, 27)
-  canvas.strokeStyle = '#9bbdff70'; canvas.strokeRect(left + 0.5, 3.5, Math.max(1, right - left - 1), 26)
-  canvas.fillStyle = '#a7c0ed'; canvas.fillRect(left, 10, 2, 12); canvas.fillRect(right - 2, 10, 2, 12)
+  canvas.fillStyle = themeColor('selection-fill', '#9bbdff0d'); canvas.fillRect(left, 3, right - left, 27)
+  canvas.strokeStyle = themeColor('selection-stroke', '#9bbdff70'); canvas.strokeRect(left + 0.5, 3.5, Math.max(1, right - left - 1), 26)
+  canvas.fillStyle = themeColor('accent', '#a7c0ed'); canvas.fillRect(left, 10, 2, 12); canvas.fillRect(right - 2, 10, 2, 12)
   const playhead = gutter + Number(store.currentTime - store.bounds.start) / full * chartWidth
-  canvas.fillStyle = '#c0d3ff'; canvas.fillRect(playhead, 3, 1, 27)
+  canvas.fillStyle = themeColor('accent', '#c0d3ff'); canvas.fillRect(playhead, 3, 1, 27)
 }
 
 function pointerDown(event: PointerEvent): void {
   if (!store.sources.length || ![0, 1, 2].includes(event.button)) return
+  stopMotion()
   store.stopZoom()
   const point = position(event)
   rememberPointer(point.x)
@@ -322,7 +354,7 @@ function pointerMove(event: PointerEvent): void {
     return
   }
   const hit = [...hits].reverse().find(hit => point.x >= hit.left && point.x <= hit.right && point.y >= hit.top && point.y <= hit.bottom)
-  tooltip.value = hit ? { left: Math.max(gutter, Math.min(point.x + 14, width - 285)), top: Math.max(ruler + 5, Math.min(point.y + 15, height - 64)), label: hit.event?.name ?? `聚合区间 · ${hit.bin!.count} 条记录`, description: hit.event ? `${formatTime(hit.event.start)} → ${formatTime(hit.event.end)} · ${formatTime(hit.event.end - hit.event.start)}` : '放大或展开原始轨道以查看独立任务' } : null
+  tooltip.value = hit ? { left: Math.max(gutter, Math.min(point.x + 14, width - 285)), top: Math.max(ruler + 5, Math.min(point.y + 15, height - 64)), label: hit.event?.name ?? `聚合区间 · ${hit.bin!.count} 条记录`, description: hit.event ? `${formatTime(hit.event.start)} → ${formatTime(hit.event.end)} · ${formatTime(hit.event.end - hit.event.start)}` : `代表算子：${hit.bin!.name ?? '未知'} · 放大查看独立任务` } : null
 }
 function pointerUp(event: PointerEvent): void {
   if (!gesture) return
@@ -346,18 +378,23 @@ function doubleClick(event: MouseEvent): void {
 }
 function wheel(event: WheelEvent): void {
   rememberPointer(Math.max(gutter, Math.min(width - 13, position(event).x)))
+  tooltip.value = null
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? height : 1
   if (event.ctrlKey || event.metaKey) {
-    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? height : 1)
+    stopMotion()
+    const delta = event.deltaY * unit
     store.zoom(Math.exp(Math.max(-1, Math.min(1, delta * 0.002))))
   }
-  else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-    const delta = BigInt(Math.round((event.deltaX || event.deltaY) / plotWidth() * Number(duration(store.viewport))))
-    store.setViewport({ start: store.viewport.start + delta, end: store.viewport.end + delta })
-  } else if (scroller.value) scroller.value.scrollTop += event.deltaY
+  else {
+    const horizontal = (event.shiftKey ? event.deltaX || event.deltaY : event.deltaX) * unit
+    if (horizontal) store.pan(BigInt(Math.round(horizontal / plotWidth() * Number(duration(store.viewport)))))
+    if (!event.shiftKey) verticalMotion.move(event.deltaY * unit)
+  }
 }
 function scroll(): void { scrollTop.value = scroller.value?.scrollTop ?? 0; invalidate() }
 function overviewDown(event: PointerEvent): void {
   if (!store.sources.length) return
+  stopMotion()
   overviewHover.value = null
   store.stopZoom()
   const bounds = overviewCanvas.value!.getBoundingClientRect()
@@ -388,12 +425,14 @@ function overviewMove(event: PointerEvent): void {
 function overviewUp(event: PointerEvent): void { overviewGesture = null; if (overviewCanvas.value?.hasPointerCapture(event.pointerId)) overviewCanvas.value.releasePointerCapture(event.pointerId) }
 
 watch(() => [store.viewport, store.rows, store.loading], invalidate)
-watch(() => store.sources, () => { queryVersion++; cache.clear(); invalidate() })
+watch(() => store.sources, () => { stopMotion(); queryVersion++; cache.clear(); invalidate() })
 watch(() => [store.currentTime, store.selection, store.bookmarks], scheduleOverlay, { deep: false })
 watch(() => [store.selectedEvent, store.selectedCuId], scheduleBackground)
+watch(resolvedTheme, () => { labelWidths.clear(); scheduleBackground() })
 watch(() => [store.overview, store.overviewMetric, store.overviewActivity], () => { overviewHover.value = null; updateData(); scheduleBackground() })
 watch(() => store.selectedCuId, id => {
   if (!id || !scroller.value) return
+  verticalMotion.cancel()
   const index = store.rows.findIndex(row => row.cuId === id)
   const top = index * rowHeight
   if (top < scrollTop.value || top > scrollTop.value + height - ruler - rowHeight) scroller.value.scrollTop = top
@@ -403,7 +442,7 @@ onMounted(() => {
   if (viewportElement.value) observer.observe(viewportElement.value)
   invalidate()
 })
-onBeforeUnmount(() => { disposed = true; store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; cache.clear(); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
+onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; cache.clear(); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
 </script>
 
 <template>
@@ -423,8 +462,8 @@ onBeforeUnmount(() => { disposed = true; store.stopZoom(); store.setZoomPointer(
     </div>
     <div ref="viewportElement" class="timeline-viewport">
       <canvas ref="background" class="timeline-background" aria-hidden="true" />
-      <canvas ref="overlay" class="timeline-overlay" :class="{ panning }" :aria-busy="store.zooming" role="img" aria-label="轨道与任务时间轴。左键拖动框选，右键拖动平移，W 在鼠标处放大，S 在鼠标处缩小，A 向左平移，D 向右平移。点击事件定位到鼠标对应时间。" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @pointerleave="pointerLeave" @dblclick="doubleClick" @wheel.prevent="wheel" @contextmenu.prevent />
-      <div ref="scroller" class="timeline-vertical-scroller" @scroll="scroll"><div :style="{ height: `${store.rows.length * rowHeight + ruler}px` }" /></div>
+      <canvas ref="overlay" class="timeline-overlay" :class="{ panning }" :aria-busy="store.zooming || store.panningViewport" role="img" aria-label="轨道与任务时间轴。左键拖动框选，右键拖动平移，W 在鼠标处放大，S 在鼠标处缩小，A 向左平移，D 向右平移。点击事件定位到鼠标对应时间。" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @pointerleave="pointerLeave" @dblclick="doubleClick" @wheel.prevent="wheel" @contextmenu.prevent />
+      <div ref="scroller" class="timeline-vertical-scroller" @scroll="scroll" @wheel.prevent="wheel" @pointerdown="stopMotion"><div :style="{ height: `${store.rows.length * rowHeight + ruler}px` }" /></div>
       <div v-if="querying" class="timeline-query-loading"><LoaderCircle :size="12" class="spin" />更新窗口</div>
       <div v-if="tooltip && !gesture" class="canvas-tooltip timeline-tooltip" :style="{ left: `${tooltip.left}px`, top: `${tooltip.top}px` }"><strong>{{ tooltip.label }}</strong><span>{{ tooltip.description }}</span></div>
       <div v-if="!store.sources.length && !store.loading" class="timeline-empty"><Focus :size="27" /><span>导入 trace，开始探索推理过程</span></div>

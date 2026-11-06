@@ -1,4 +1,5 @@
 import type { DensityBin, EventQuery, ImportProgress, ParsedTraceSource, RawSpan, SourceMetadata, SqlRow, TimeRange, TraceFileParser, TrackGroup } from '../../core/types'
+import { queryDensity } from './density'
 import { PerfettoEngine } from './engine'
 import { queryGroupedStatistics } from './grouped-statistics'
 import { queryActivity } from './activity'
@@ -63,9 +64,7 @@ class PerfettoSource implements ParsedTraceSource {
     return { events: rows.slice(0, limit).map(row => this.span(row)), truncated: rows.length > limit }
   }
   async density(query: EventQuery & { buckets: number }): Promise<DensityBin[]> {
-    const width = (query.end - query.start) / BigInt(Math.max(1, Math.trunc(query.buckets))) || 1n
-    const rows = await this.engine.query(`SELECT track_id, MIN(MAX(ts, ${query.start})) AS begin_ns, MAX(MIN(${this.endExpression()}, ${query.end})) AS end_ns, COUNT(*) AS count FROM slice WHERE ${this.where(query)} GROUP BY track_id, CAST((MAX(ts, ${query.start}) - ${query.start}) / ${width} AS INT)`)
-    return rows.map(row => ({ trackId: number(row.track_id), start: integer(row.begin_ns), end: integer(row.end_ns), count: number(row.count) }))
+    return queryDensity(this.engine, query, this.metadata.end)
   }
   async statistics(query: EventQuery) {
     const rows = await this.engine.query(`WITH clipped AS (SELECT MAX(ts, ${query.start}) AS begin_ns, MIN(${this.endExpression()}, ${query.end}) AS end_ns FROM slice WHERE ${this.where(query)}), ordered AS (SELECT *, MAX(end_ns) OVER (ORDER BY begin_ns, end_ns ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS previous_end FROM clipped), grouped AS (SELECT *, SUM(CASE WHEN previous_end IS NULL OR begin_ns > previous_end THEN 1 ELSE 0 END) OVER (ORDER BY begin_ns, end_ns ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS group_id FROM ordered), merged AS (SELECT MIN(begin_ns) AS begin_ns, MAX(end_ns) AS end_ns FROM grouped GROUP BY group_id) SELECT (SELECT COUNT(*) FROM clipped) AS count, (SELECT COALESCE(SUM(end_ns - begin_ns), 0) FROM clipped) AS sum_duration, (SELECT COALESCE(SUM(end_ns - begin_ns), 0) FROM merged) AS union_duration`)

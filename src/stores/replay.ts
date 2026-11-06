@@ -4,10 +4,12 @@ import { ComputeModelRegistry } from '../core/registry'
 import { WorkerTraceSource } from '../core/worker-source'
 import { clampTime, duration, fitRange, formatTime, timeBuckets } from '../core/time'
 import { parseProject, persistProject } from '../core/project'
+import { stepPlaybackSpeed } from '../core/playback-speed'
 import type { ActivityBin, Bookmark, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, SampleFile, TimelineRow, TimeRange } from '../core/types'
 import { IntervalIndex } from '../engine/interval-index'
 import { PlaybackClock } from '../engine/playback-clock'
 import { ViewportZoom } from '../engine/viewport-zoom'
+import { ViewportPan } from '../engine/viewport-pan'
 import { MegakernelModel } from '../models/megakernel'
 
 const modes = new ComputeModelRegistry().register(new MegakernelModel())
@@ -25,6 +27,7 @@ export const useReplayStore = defineStore('replay', () => {
   const speed = ref(0.01)
   const viewport = ref<TimeRange>({ start: 0n, end: 1n })
   const zooming = ref(false)
+  const panningViewport = ref(false)
   let zoomPointer: number | null = null
   const selection = ref<TimeRange | null>(null)
   const looping = ref(false)
@@ -68,7 +71,8 @@ export const useReplayStore = defineStore('replay', () => {
   clock.subscribe(value => { currentTime.value = value.time; playing.value = value.playing; buffering.value = value.buffering; speed.value = value.speed })
   const bounds = computed<TimeRange>(() => sources.value.length ? { start: sources.value.reduce((result, source) => source.range.start < result ? source.range.start : result, sources.value[0]!.range.start), end: sources.value.reduce((result, source) => source.range.end > result ? source.range.end : result, sources.value[0]!.range.end) } : { start: 0n, end: 1n })
   const viewportZoom = markRaw(new ViewportZoom(() => viewport.value, () => bounds.value, range => { viewport.value = range }, active => { zooming.value = active }))
-  watch(bounds, () => viewportZoom.cancel(), { flush: 'sync' })
+  const viewportPan = markRaw(new ViewportPan(() => viewport.value, () => bounds.value, range => { viewport.value = range }, active => { panningViewport.value = active }))
+  watch(bounds, stopZoom, { flush: 'sync' })
   const totalEvents = computed(() => sources.value.reduce((result, source) => result + source.source.metadata.eventCount, 0))
   const devices = computed(() => sources.value.map(source => source.device))
   const cus = computed(() => devices.value.flatMap(device => device.cus))
@@ -278,17 +282,28 @@ export const useReplayStore = defineStore('replay', () => {
 
   watch(currentTime, time => {
     void refreshActive(time)
-    if (playing.value && following.value && !zooming.value && (time < viewport.value.start || time > viewport.value.end - duration(viewport.value) / 10n)) {
+    if (playing.value && following.value && !zooming.value && !panningViewport.value && (time < viewport.value.start || time > viewport.value.end - duration(viewport.value) / 10n)) {
       const span = duration(viewport.value)
       setViewport({ start: time - span / 5n, end: time + span * 4n / 5n })
     }
   })
   function seek(time: bigint): void { clock.seek(time) }
-  function stopZoom(): void { viewportZoom.cancel() }
+  function stepSpeed(direction: -1 | 1): void {
+    const next = stepPlaybackSpeed(speed.value, direction)
+    if (next !== speed.value) clock.setSpeed(next)
+  }
+  function stopZoom(): void { viewportZoom.cancel(); viewportPan.cancel() }
+  function stopPan(): void { viewportPan.cancel() }
   function setZoomPointer(ratio: number | null): void { zoomPointer = ratio }
   function setViewport(range: TimeRange): void { stopZoom(); viewport.value = fitRange(range, bounds.value) }
   function fit(): void { setViewport(bounds.value) }
+  function pan(delta: bigint): void {
+    viewportZoom.cancel()
+    if (playing.value) following.value = false
+    viewportPan.pan(delta)
+  }
   function zoom(factor: number, anchor?: bigint): void {
+    viewportPan.cancel()
     if (playing.value) following.value = false
     const ratio = anchor === undefined ? zoomPointer ?? 0.5 : Number(anchor - viewport.value.start) / Number(duration(viewport.value))
     viewportZoom.zoom(factor, ratio)
@@ -432,5 +447,5 @@ export const useReplayStore = defineStore('replay', () => {
     notify('项目布局、书签、时钟偏移与播放位置已恢复')
   }
 
-  return { sources, computeModelId, sourceParserId, samples, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, loadSamples, importFiles, cancelImport, removeSource, seek, setViewport, stopZoom, setZoomPointer, fit, zoom, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
+  return { sources, computeModelId, sourceParserId, samples, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, loadSamples, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
 })

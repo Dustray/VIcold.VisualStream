@@ -21,6 +21,60 @@ async function project(page: Page): Promise<ProjectSnapshot> {
 
 function width(snapshot: ProjectSnapshot): bigint { return BigInt(snapshot.viewport.end) - BigInt(snapshot.viewport.start) }
 
+test('A and D animate the viewport, accumulate held keys, and yield to direct navigation', async ({ page }) => {
+  await page.addInitScript(() => {
+    const positions: number[] = []
+    ;(window as unknown as { panPositions: number[] }).panPositions = positions
+    const original = CanvasRenderingContext2D.prototype.strokeRect
+    CanvasRenderingContext2D.prototype.strokeRect = function(horizontal, vertical, width, height) {
+      if (this.canvas.classList.contains('timeline-overview')) positions.push(horizontal)
+      original.call(this, horizontal, vertical, width, height)
+    }
+  })
+  await ready(page)
+  for (let index = 0; index < 2; index++) {
+    await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
+    await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
+  }
+  const initial = await project(page)
+  const distance = width(initial) / 5n
+  const start = await page.evaluate(() => {
+    const positions = (window as unknown as { panPositions: number[] }).panPositions
+    const last = positions.at(-1)!
+    positions.length = 0
+    return last
+  })
+  await page.keyboard.press('d')
+  await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'true')
+  const right = await project(page)
+  expect(BigInt(right.viewport.start)).toBe(BigInt(initial.viewport.start) + distance)
+  expect(width(right)).toBe(width(initial))
+  const positions = await page.evaluate(async () => {
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    return (window as unknown as { panPositions: number[] }).panPositions
+  })
+  expect(new Set(positions).size).toBeGreaterThan(5)
+  const end = positions.at(-1)!
+  expect(positions.some(position => position > start && position < end)).toBe(true)
+  await page.keyboard.press('a')
+  expect((await project(page)).viewport).toEqual(initial.viewport)
+  await page.keyboard.down('d')
+  await page.keyboard.down('d')
+  await page.keyboard.down('d')
+  await page.keyboard.up('d')
+  const repeated = await project(page)
+  expect(BigInt(repeated.viewport.start)).toBe(BigInt(initial.viewport.start) + distance * 3n)
+  expect(width(repeated)).toBe(width(initial))
+  expect(repeated.time).toBe(initial.time)
+  expect(repeated.selection).toEqual(initial.selection)
+  await page.keyboard.press('a')
+  await page.getByRole('button', { name: '适配全部时间', exact: true }).click()
+  const fitted = await project(page)
+  expect(BigInt(fitted.viewport.start)).toBe(0n)
+  expect(width(fitted)).toBe(width(initial) * 4n)
+  await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
+})
+
 test('keyboard and wheel zoom keep the pointer time fixed independently of the playhead and selection', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -42,7 +96,7 @@ test('keyboard and wheel zoom keep the pointer time fixed independently of the p
   await page.mouse.move(box.x + horizontal, box.y + 15)
   await page.keyboard.press('w')
   const zoomed = await project(page)
-  expect(width(zoomed)).toBe(width(original) / 2n)
+  expect(width(zoomed)).toBe(BigInt(Math.round(Number(width(original)) * 0.8)))
   expect(atPointer(zoomed)).toBe(anchor)
   expect(zoomed.time).toBe(original.time)
   expect(zoomed.selection).toEqual(original.selection)
@@ -74,14 +128,14 @@ test('keyboard and wheel zoom keep the pointer time fixed independently of the p
   await page.keyboard.press('w')
   await page.keyboard.press('f')
   expect((await project(page)).viewport).toEqual(original.viewport)
-  await page.getByRole('combobox', { name: '重放速度' }).selectOption('0.00001')
+  await page.getByRole('slider', { name: '重放速度' }).fill('0')
   await page.getByRole('button', { name: '播放重放', exact: true }).click()
   await page.mouse.move(box.x + horizontal, box.y + 15)
   await page.keyboard.press('w')
   const playing = await project(page)
   await page.getByRole('button', { name: '暂停重放', exact: true }).click()
   expect(atPointer(playing)).toBe(anchor)
-  expect(width(playing)).toBe(width(original) / 2n)
+  expect(width(playing)).toBe(BigInt(Math.round(Number(width(original)) * 0.8)))
   expect((await project(page)).viewport).toEqual(playing.viewport)
   expect(errors).toEqual([])
 })
@@ -165,10 +219,12 @@ test('WASD, slow speeds and global Space work with control focus while text inpu
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await ready(page)
+  await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
+  await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
   const original = await project(page)
   await page.keyboard.press('w')
   const zoomed = await project(page)
-  expect(width(zoomed)).toBe(width(original) / 2n)
+  expect(width(zoomed)).toBe(BigInt(Math.round(Number(width(original)) * 0.8)))
   await page.keyboard.press('a')
   const earlier = await project(page)
   expect(BigInt(earlier.viewport.start)).toBe(BigInt(zoomed.viewport.start) - width(zoomed) / 5n)
@@ -180,11 +236,11 @@ test('WASD, slow speeds and global Space work with control focus while text inpu
   const unzoomed = await project(page)
   expect(unzoomed.viewport).toEqual(original.viewport)
 
-  const speed = page.getByRole('combobox', { name: '重放速度' })
-  await speed.selectOption('0.0001')
-  await expect(speed).toHaveValue('0.0001')
-  await speed.selectOption('0.00001')
-  await expect(speed).toHaveValue('0.00001')
+  const speed = page.getByRole('slider', { name: '重放速度' })
+  await speed.fill('1')
+  await expect(speed).toHaveValue('1')
+  await speed.fill('0')
+  await expect(speed).toHaveValue('0')
   await speed.focus()
   await page.keyboard.press('Space')
   await expect(page.getByRole('button', { name: '暂停重放', exact: true })).toBeVisible()

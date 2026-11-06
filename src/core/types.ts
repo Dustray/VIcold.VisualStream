@@ -13,7 +13,7 @@ export interface RawSpan extends TimeRange {
   incomplete: boolean
 }
 export interface EventPage { events: RawSpan[]; truncated: boolean }
-export interface DensityBin extends TimeRange { trackId: number; count: number }
+export interface DensityBin extends TimeRange { trackId: number; count: number; name?: string; representativeDuration?: bigint }
 export interface ActivityBin extends TimeRange { busyDuration: bigint }
 export interface RangeStatistics { count: number; sumDuration: bigint; unionDuration: bigint }
 export interface TrackGroup { id: string; trackIds: number[] }

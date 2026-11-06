@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Activity, ArrowUpRight, Braces, ChevronRight, Crosshair, Info, Layers3, Search, X } from 'lucide-vue-next'
-import { eventColor, formatTime } from '../core/time'
+import { formatTime } from '../core/time'
+import { operatorColor as eventColor } from '../core/theme'
 import { useReplayStore } from '../stores/replay'
 
 const store = useReplayStore()

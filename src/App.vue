@@ -6,7 +6,10 @@ import CuGrid from './components/CuGrid.vue'
 import CuUtilization from './components/CuUtilization.vue'
 import Inspector from './components/Inspector.vue'
 import Timeline from './components/Timeline.vue'
-import { duration, eventColor, formatBytes, formatTime, parseMilliseconds } from './core/time'
+import PlaybackSpeed from './components/PlaybackSpeed.vue'
+import ThemeSelect from './components/ThemeSelect.vue'
+import { duration, formatBytes, formatTime, parseMilliseconds } from './core/time'
+import { operatorColor as eventColor } from './core/theme'
 import { useReplayStore } from './stores/replay'
 
 const store = useReplayStore()
@@ -20,9 +23,6 @@ const storedRatio = Number(localStorage.getItem('visualstream.upperRatio') ?? 54
 const upperRatio = ref(Number.isFinite(storedRatio) ? Math.max(28, Math.min(72, storedRatio)) : 54)
 const timeInput = ref('')
 const customSpeed = ref('')
-const speeds = [0.00001, 0.0001, 0.001, 0.01, 0.1, 0.5, 1, 2, 10]
-const isPresetSpeed = computed(() => speeds.some(speed => Math.abs(speed - store.speed) < 1e-10))
-const dynamicSpeedLabel = computed(() => `${store.speed.toLocaleString('en-US', { maximumFractionDigits: 6 })}× · ${Math.abs(store.speed - Math.max(0.000001, Number(duration(store.bounds)) / 20e9)) < 1e-10 ? '20s 演示' : '自定义'}`)
 const progressPercent = computed(() => Math.round(store.progress.fraction * 100))
 const sourceTitle = computed(() => store.sources.length === 1 ? store.sources[0]!.source.metadata.filename.replace('.perfetto-trace', '') : store.sources.length > 1 ? `多卡会话 · ${store.sources.length} 个来源` : '未打开会话')
 const sourceForEvent = (sourceId: string) => store.sources.find(source => source.source.metadata.id === sourceId)
@@ -48,7 +48,6 @@ function drop(event: DragEvent): void {
   if (files.length === 1 && files[0]!.name.endsWith('.json')) void store.openProject(files[0]!)
   else if (files.length) void store.importFiles(files)
 }
-function changeSpeed(event: Event): void { const value = Number((event.target as HTMLSelectElement).value); if (Number.isFinite(value) && value > 0) store.clock.setSpeed(value) }
 function applyCustomSpeed(): void { try { store.clock.setSpeed(Number(customSpeed.value)); customSpeed.value = '' } catch (error) { store.notify(String(error), 'error') } }
 function seekInput(): void { const value = parseMilliseconds(timeInput.value); if (value === null) { store.notify('请输入毫秒时间，最多保留六位小数'); return }; store.seek(value); timeInput.value = '' }
 function offsetChanged(sourceId: string, event: Event): void { const value = parseMilliseconds((event.target as HTMLInputElement).value); if (value === null) store.notify('时钟偏移需要有效的毫秒数', 'error'); else store.setOffset(sourceId, value) }
@@ -96,12 +95,15 @@ function keydown(event: KeyboardEvent): void {
   if (event.key === '?') { modal.value = 'help'; return }
   if (!store.sources.length) return
   const key = event.key.toLowerCase()
-  if (key === 'w' || key === 's') { event.preventDefault(); const factor = event.repeat ? 0.9 : 0.5; store.zoom(key === 'w' ? factor : 1 / factor) }
+  const target = eventElement(event)
+  if ((target instanceof HTMLSelectElement || target instanceof HTMLInputElement && target.type === 'range') && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'home', 'end', 'pageup', 'pagedown'].includes(key)) return
+  if (key === 'w' || key === 's') { event.preventDefault(); const factor = event.repeat ? 0.9 : 0.8; store.zoom(key === 'w' ? factor : 1 / factor) }
+  else if (key === 'e' || key === 'q') { event.preventDefault(); store.stepSpeed(key === 'e' ? 1 : -1) }
   else if (key === 'a' || key === 'd') {
     event.preventDefault()
     const distance = duration(store.viewport) / 5n || 1n
     const delta = key === 'a' ? -distance : distance
-    store.setViewport({ start: store.viewport.start + delta, end: store.viewport.end + delta })
+    store.pan(delta)
   }
   else if (key === 'f') store.fit()
   else if (key === 'z') store.zoomSelection()
@@ -135,7 +137,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
     <header class="app-header">
       <div class="brand"><span class="brand-symbol"><Workflow :size="21" /></span><span>visualstream<span class="brand-version">PREVIEW</span></span></div>
       <div class="header-section"><span class="header-slash">/</span><span class="header-workspace">推理重放工作台</span><span class="mode-tag"><Layers3 :size="12" />Megakernel</span></div>
-      <div class="header-actions"><span class="local-status"><ShieldCheck :size="13" />本地解析</span><span class="header-divider" /><button class="icon-button" title="打开项目" aria-label="打开项目" @click="projectInput?.click()"><FolderOpen :size="17" /></button><Button variant="secondary" size="sm" :disabled="!store.sources.length" @click="store.saveProject()"><ArrowDownToLine :size="14" />保存项目</Button><button class="icon-button" title="快捷键与帮助" aria-label="快捷键与帮助" @click="modal = 'help'"><CircleHelp :size="17" /></button><button class="icon-button" title="会话设置" aria-label="会话设置" @click="modal = 'settings'"><Settings2 :size="17" /></button></div>
+      <div class="header-actions"><ThemeSelect /><span class="local-status"><ShieldCheck :size="13" />本地解析</span><span class="header-divider" /><button class="icon-button" title="打开项目" aria-label="打开项目" @click="projectInput?.click()"><FolderOpen :size="17" /></button><Button variant="secondary" size="sm" :disabled="!store.sources.length" @click="store.saveProject()"><ArrowDownToLine :size="14" />保存项目</Button><button class="icon-button" title="快捷键与帮助" aria-label="快捷键与帮助" @click="modal = 'help'"><CircleHelp :size="17" /></button><button class="icon-button" title="会话设置" aria-label="会话设置" @click="modal = 'settings'"><Settings2 :size="17" /></button></div>
     </header>
 
     <div class="app-body">
@@ -176,7 +178,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
             <Inspector />
           </div>
           <div class="workspace-resizer" role="separator" aria-label="调整视图与时间轴高度" aria-orientation="horizontal" tabindex="0" @pointerdown="resizeStart" @pointermove="resizeMove" @pointerup="resizeEnd" @pointercancel="resizeEnd" @keydown.up.prevent="upperRatio = Math.max(28, upperRatio - 3)" @keydown.down.prevent="upperRatio = Math.min(72, upperRatio + 3)"><span /></div>
-          <div class="playback-bar"><div class="playback-controls"><button class="icon-button" aria-label="回到起点" title="回到起点 · Home" :disabled="!store.sources.length" @click="store.seek(store.bounds.start)"><RotateCcw :size="15" /></button><button class="icon-button" aria-label="前一个事件" title="前一个事件 · ←" :disabled="!store.sources.length" @click="store.step(-1)"><SkipBack :size="15" /></button><button class="play-button" :aria-label="store.playing ? '暂停重放' : '播放重放'" :disabled="!store.sources.length || store.loading" title="播放 / 暂停 · Space" @click="store.clock.toggle()"><LoaderCircle v-if="store.buffering" :size="17" class="spin" /><Pause v-else-if="store.playing" :size="17" fill="currentColor" /><Play v-else :size="17" fill="currentColor" /></button><button class="icon-button" aria-label="下一个事件" title="下一个事件 · →" :disabled="!store.sources.length" @click="store.step(1)"><SkipForward :size="15" /></button><span class="toolbar-divider" /><div class="playback-time" data-testid="playback-time"><strong>{{ formatTime(store.currentTime) }}</strong><span>/ {{ store.sources.length ? formatTime(duration(store.bounds)) : '—' }}</span></div></div><div class="playback-options"><label class="speed-select-label" title="重放速度"><span>速度</span><select :value="store.speed" aria-label="重放速度" @change="changeSpeed"><option v-if="!isPresetSpeed" :value="store.speed">{{ dynamicSpeedLabel }}</option><option v-for="value in speeds" :key="value" :value="value">{{ value }}×</option></select></label><button class="icon-button" :class="{ selected: store.looping }" aria-label="循环选区" :aria-pressed="store.looping" title="循环选区" @click="store.toggleLoop()"><Repeat2 :size="16" /></button><button class="icon-button" aria-label="添加时间书签" title="添加书签 · B" :disabled="!store.sources.length" @click="store.addBookmark()"><Bookmark :size="15" /></button><span class="toolbar-divider" /><span class="play-state"><span class="tiny-dot" :class="{ green: store.playing, blue: store.buffering }" />{{ store.buffering ? '缓冲中' : store.playing ? '正在重放' : '已暂停' }}</span></div></div>
+          <div class="playback-bar"><div class="playback-controls"><button class="icon-button" aria-label="回到起点" title="回到起点 · Home" :disabled="!store.sources.length" @click="store.seek(store.bounds.start)"><RotateCcw :size="15" /></button><button class="icon-button" aria-label="前一个事件" title="前一个事件 · ←" :disabled="!store.sources.length" @click="store.step(-1)"><SkipBack :size="15" /></button><button class="play-button" :aria-label="store.playing ? '暂停重放' : '播放重放'" :disabled="!store.sources.length || store.loading" title="播放 / 暂停 · Space" @click="store.clock.toggle()"><LoaderCircle v-if="store.buffering" :size="17" class="spin" /><Pause v-else-if="store.playing" :size="17" fill="currentColor" /><Play v-else :size="17" fill="currentColor" /></button><button class="icon-button" aria-label="下一个事件" title="下一个事件 · →" :disabled="!store.sources.length" @click="store.step(1)"><SkipForward :size="15" /></button><span class="toolbar-divider" /><div class="playback-time" data-testid="playback-time"><strong>{{ formatTime(store.currentTime) }}</strong><span>/ {{ store.sources.length ? formatTime(duration(store.bounds)) : '—' }}</span></div></div><div class="playback-options"><PlaybackSpeed /><button class="icon-button" :class="{ selected: store.looping }" aria-label="循环选区" :aria-pressed="store.looping" title="循环选区" @click="store.toggleLoop()"><Repeat2 :size="16" /></button><button class="icon-button" aria-label="添加时间书签" title="添加书签 · B" :disabled="!store.sources.length" @click="store.addBookmark()"><Bookmark :size="15" /></button><span class="toolbar-divider" /><span class="play-state"><span class="tiny-dot" :class="{ green: store.playing, blue: store.buffering }" />{{ store.buffering ? '缓冲中' : store.playing ? '正在重放' : '已暂停' }}</span></div></div>
           <Timeline />
         </div>
       </main>
@@ -188,7 +190,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
     <div v-if="dragDepth > 0" class="drop-overlay"><div><Upload :size="38" /><h2>释放以导入 trace</h2><p>Megakernel + Perfetto · 支持多个计算卡来源</p></div></div>
 
     <div v-if="modal" class="modal-backdrop" @pointerdown.self="modal = null"><section class="modal" role="dialog" aria-modal="true" :aria-label="modal === 'help' ? '快捷键与帮助' : '会话设置'"><header><div><span class="eyebrow">VISUALSTREAM</span><h2>{{ modal === 'help' ? '探索重放工作台' : '会话设置' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="modal = null"><X :size="18" /></button></header><div class="modal-body">
-      <template v-if="modal === 'help'"><p class="muted-description">载入 trace 后，用统一播放头联动资源矩阵、当前任务与时间轴。所有显示均来自记录，未采集的指标保持未知。</p><table class="shortcut-table"><tbody><tr><td>全局播放 / 暂停（文本框编辑时除外）</td><td><kbd>Space</kbd></td></tr><tr><td>以指针为中心平滑缩放</td><td><kbd>Ctrl / ⌘</kbd> + 滚轮</td></tr><tr><td>平移时间窗口</td><td>右键 / 中键拖动</td></tr><tr><td>创建统计选区</td><td>在轨道区按住左键拖动</td></tr><tr><td>以指针为中心平滑放大 / 缩小</td><td><kbd>W</kbd> / <kbd>S</kbd></td></tr><tr><td>向左 / 向右平移</td><td><kbd>A</kbd> / <kbd>D</kbd></td></tr><tr><td>精确定位时间</td><td>点击事件中的任意位置</td></tr><tr><td>前后事件边界</td><td><kbd>←</kbd> <kbd>→</kbd></td></tr><tr><td>适配全部 / 缩放选区</td><td><kbd>F</kbd> / <kbd>Z</kbd></td></tr><tr><td>设置循环入点 / 出点</td><td><kbd>I</kbd> / <kbd>O</kbd></td></tr><tr><td>添加时间书签</td><td><kbd>B</kbd></td></tr><tr><td>搜索任务</td><td><kbd>Ctrl / ⌘</kbd> + <kbd>F</kbd></td></tr></tbody></table><div class="notice"><ShieldCheck :size="15" />文件在本地浏览器内解析；重放显示采集时的活动，不是当前硬件监控。</div></template>
+      <template v-if="modal === 'help'"><p class="muted-description">载入 trace 后，用统一播放头联动资源矩阵、当前任务与时间轴。所有显示均来自记录，未采集的指标保持未知。</p><table class="shortcut-table"><tbody><tr><td>全局播放 / 暂停（文本框编辑时除外）</td><td><kbd>Space</kbd></td></tr><tr><td>以指针为中心平滑缩放</td><td><kbd>Ctrl / ⌘</kbd> + 滚轮</td></tr><tr><td>平移时间窗口</td><td>右键 / 中键拖动</td></tr><tr><td>创建统计选区</td><td>在轨道区按住左键拖动</td></tr><tr><td>以指针为中心小幅放大 / 缩小</td><td><kbd>W</kbd> / <kbd>S</kbd></td></tr><tr><td>调快 / 调慢重放速度</td><td><kbd>E</kbd> / <kbd>Q</kbd></td></tr><tr><td>向左 / 向右平移</td><td><kbd>A</kbd> / <kbd>D</kbd></td></tr><tr><td>精确定位时间</td><td>点击事件中的任意位置</td></tr><tr><td>前后事件边界</td><td><kbd>←</kbd> <kbd>→</kbd></td></tr><tr><td>适配全部 / 缩放选区</td><td><kbd>F</kbd> / <kbd>Z</kbd></td></tr><tr><td>设置循环入点 / 出点</td><td><kbd>I</kbd> / <kbd>O</kbd></td></tr><tr><td>添加时间书签</td><td><kbd>B</kbd></td></tr><tr><td>搜索任务</td><td><kbd>Ctrl / ⌘</kbd> + <kbd>F</kbd></td></tr></tbody></table><div class="notice"><ShieldCheck :size="15" />文件在本地浏览器内解析；重放显示采集时的活动，不是当前硬件监控。</div></template>
       <template v-else><div class="settings-grid"><label>计算模式<span>Megakernel v1</span></label><label>源文件解析器<span>Perfetto v1</span></label><label>计算资源解释<span>多卡 → CU → Group</span></label><label>渲染方式<span>Canvas 2D · 分级细节</span></label></div><div class="section-label">精确跳转与速度</div><div class="settings-input-row"><label>时间位置（ms）<input v-model="timeInput" inputmode="decimal" placeholder="例如 50.125" @keydown.enter="seekInput" /></label><Button variant="secondary" size="sm" @click="seekInput">跳转</Button></div><div class="settings-input-row"><label>自定义速度（×）<input v-model="customSpeed" inputmode="decimal" placeholder="0.001 — 1000" @keydown.enter="applyCustomSpeed" /></label><Button variant="secondary" size="sm" @click="applyCustomSpeed">应用</Button></div><div class="section-label">来源与时钟偏移</div><div v-for="source in store.sources" :key="source.source.metadata.id" class="source-offset"><span :title="source.source.metadata.filename">{{ source.device.label }}{{ source.device.rank === null ? '' : ` · Rank ${source.device.rank}` }}</span><label><input :value="Number(source.offset) / 1e6" type="number" step="0.001" :aria-label="`${source.device.label} 的时钟偏移`" @change="offsetChanged(source.source.metadata.id, $event)" /><span>ms</span></label></div><div class="notice"><ShieldCheck :size="15" />不同来源默认相对起点对齐。填写偏移不等于已经验证物理时钟同步；设备与 rank 标签来自文件名提示。</div><div class="section-label">导入诊断</div><p v-for="message in store.diagnostics" :key="message" class="diagnostic-item">{{ message }}</p></template>
     </div></section></div>
   </div>
