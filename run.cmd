@@ -21,7 +21,7 @@ if not exist "node_modules\.bin\vite.cmd" (
   if errorlevel 1 goto failed
 )
 
-echo [VisualStream] Preparing Perfetto and sample traces...
+echo [VisualStream] Preparing Perfetto engine...
 call npm.cmd run setup:assets
 if errorlevel 1 goto failed
 

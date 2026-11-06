@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { openSettings, openWorkspace, importTraces } from './workspace'
 
 async function ready(page: Page, count = '128,200'): Promise<void> {
   await expect(page.locator('.sidebar-info')).toContainText(count)
@@ -43,7 +44,7 @@ async function brush(page: Page, left: number, right: number): Promise<void> {
 test('real TP1 reports full and selected CU utilization, supports sorting and CU selection', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
   await page.getByRole('button', { name: 'CU 利用率', exact: true }).click()
   const panel = page.getByRole('region', { name: 'CU 利用率统计' })
@@ -87,9 +88,9 @@ test('real TP1 reports full and selected CU utilization, supports sorting and CU
 test('real TP2 aggregates both cards, filters by device and recomputes offsets and empty selections', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
-  await page.getByRole('button', { name: 'TP2 · 双卡' }).click()
+  await importTraces(page, 'dual', true)
   await ready(page, '445,328')
   await page.getByRole('button', { name: 'CU 利用率', exact: true }).click()
   const panel = page.getByRole('region', { name: 'CU 利用率统计' })
@@ -105,7 +106,7 @@ test('real TP2 aggregates both cards, filters by device and recomputes offsets a
   await filter.selectOption({ label: '所有计算卡' })
   expect(await verifyTotals(page, 152)).toBe(full)
 
-  await page.getByRole('button', { name: '会话设置', exact: true }).click()
+  await openSettings(page, '会话设置')
   const offset = page.locator('.source-offset input').nth(1)
   await offset.fill('200')
   await offset.press('Tab')

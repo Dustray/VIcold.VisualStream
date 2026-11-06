@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { openSettings, openWorkspace, importTraces } from './workspace'
 import { readFile } from 'node:fs/promises'
 import type { ProjectSnapshot } from '../../src/core/types'
 
@@ -37,7 +38,7 @@ async function compareFullUtilization(page: Page, values: Awaited<ReturnType<typ
 test('overview switches metrics without changing replay state and matches exact full CU activity', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
   const metric = page.getByRole('combobox', { name: '全局概览指标' })
   await expect(metric).toHaveValue('utilization')
@@ -88,11 +89,11 @@ test('overview switches metrics without changing replay state and matches exact 
 test('global utilization updates for new cards and offsets while ignoring the card filter', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
   await page.getByRole('combobox', { name: '全局概览指标' }).selectOption('utilization')
   await summary(page)
-  await page.getByRole('button', { name: 'TP2 · 双卡' }).click()
+  await importTraces(page, 'dual', true)
   await ready(page, '445,328')
   const full = await summary(page)
   await compareFullUtilization(page, full)
@@ -101,7 +102,7 @@ test('global utilization updates for new cards and offsets while ignoring the ca
   expect(await summary(page)).toEqual(full)
   await filter.selectOption({ label: '所有计算卡' })
   const oldTitle = await page.locator('.timeline-overview-summary').getAttribute('title')
-  await page.getByRole('button', { name: '会话设置', exact: true }).click()
+  await openSettings(page, '会话设置')
   const offset = page.locator('.source-offset input').nth(1)
   await offset.fill('200')
   await offset.press('Tab')

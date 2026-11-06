@@ -86,11 +86,11 @@ export interface ComputeModelPlugin {
   build(source: ParsedTraceSource): Promise<ReplayDataSource>
 }
 export interface Bookmark { id: string; time: bigint; label: string }
-export interface SampleFile { name: string; bytes: number; url: string }
 export interface ProjectSnapshot {
   version: 1
   computeModel: { id: 'megakernel'; version: '1' }
   sources: { filename: string; fingerprint: string; parser: { id: 'perfetto'; version: '1' }; offset: string }[]
+  visibleSources?: string[]
   time: string
   speed: number
   viewport: { start: string; end: string }

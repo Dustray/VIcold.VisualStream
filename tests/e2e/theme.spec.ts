@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
+import { openSettings, openWorkspace } from './workspace'
 import { readFile } from 'node:fs/promises'
 import type { ProjectSnapshot } from '../../src/core/types'
 
 async function ready(page: Page): Promise<void> {
-  await page.goto('/')
+  await openWorkspace(page)
   await expect(page.locator('.sidebar-info')).toContainText('128,200')
   await expect(page.locator('.import-progress')).toHaveCount(0)
   await expect(page.locator('.timeline-query-loading')).toHaveCount(0)
@@ -17,13 +18,21 @@ async function project(page: Page): Promise<ProjectSnapshot> {
   return JSON.parse(await readFile(path, 'utf8')) as ProjectSnapshot
 }
 
+async function chooseTheme(page: Page, value: string): Promise<void> {
+  await openSettings(page)
+  await page.getByRole('combobox', { name: '界面主题' }).selectOption(value)
+  await page.getByRole('button', { name: '关闭对话框' }).click()
+}
+
 test('four themes update page and canvases, improve text contrast, persist, and preserve replay state', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await ready(page)
+  await openSettings(page)
   const theme = page.getByRole('combobox', { name: '界面主题' })
   await expect(theme.locator('option')).toHaveCount(4)
   await expect(theme).toHaveValue('classic')
+  await page.getByRole('button', { name: '关闭对话框' }).click()
   await page.getByRole('slider', { name: '重放速度' }).fill('1')
   await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
   await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
@@ -37,7 +46,7 @@ test('four themes update page and canvases, improve text contrast, persist, and 
   const canvasColors = new Set<string>()
   const gridImages = new Set<string>()
   for (const value of ['light', 'dark', 'classic']) {
-    await theme.selectOption(value)
+    await chooseTheme(page, value)
     await expect(page.locator('html')).toHaveAttribute('data-theme', value)
     const appearance = await page.evaluate(async () => {
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
@@ -72,8 +81,9 @@ test('four themes update page and canvases, improve text contrast, persist, and 
   }
   expect(canvasColors.size).toBe(3)
   expect(gridImages.size).toBe(3)
-  await theme.selectOption('light')
+  await chooseTheme(page, 'light')
   await page.reload()
+  await openSettings(page)
   await expect(theme).toHaveValue('light')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   expect(errors).toEqual([])
@@ -82,6 +92,7 @@ test('four themes update page and canvases, improve text contrast, persist, and 
 test('system preference follows live changes while explicit themes remain fixed', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await ready(page)
+  await openSettings(page)
   const theme = page.getByRole('combobox', { name: '界面主题' })
   await theme.selectOption('system')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
@@ -89,6 +100,7 @@ test('system preference follows live changes while explicit themes remain fixed'
   await page.emulateMedia({ colorScheme: 'light' })
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await page.reload()
+  await openSettings(page)
   await expect(theme).toHaveValue('system')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await page.emulateMedia({ colorScheme: 'dark' })

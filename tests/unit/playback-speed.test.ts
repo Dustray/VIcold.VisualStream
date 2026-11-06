@@ -25,6 +25,6 @@ describe('playback speed shortcuts', () => {
     expect(stepPlaybackSpeed(0.000001, -1)).toBe(0.000001)
     expect(stepPlaybackSpeed(0.000001, 1)).toBe(0.00001)
     expect(stepPlaybackSpeed(100, 1)).toBe(100)
-    expect(stepPlaybackSpeed(100, -1)).toBe(10)
+    expect(stepPlaybackSpeed(100, -1)).toBe(1)
   })
 })

@@ -22,7 +22,7 @@ function locate(): void { if (!store.selectedEvent) return; store.seek(store.sel
     <div class="inspector-scroll">
       <template v-if="tab === 'details'">
         <template v-if="store.selectedEvent">
-          <div class="eyebrow">选中事件</div><div class="event-title"><span class="event-dot" :style="{ background: eventColor(store.selectedEvent.name) }" /><h3>{{ store.selectedEvent.name }}</h3></div>
+          <div class="inspector-heading"><Layers3 :size="16" /><h3>选中事件</h3><button type="button" class="icon-button" aria-label="取消选中事件" title="取消选中事件" @click="store.selectedEvent = null; store.eventArgs = {}"><X :size="14" /></button></div><div class="event-title"><span class="event-dot" :style="{ background: eventColor(store.selectedEvent.name) }" /><h3>{{ store.selectedEvent.name }}</h3></div>
           <div class="event-tags"><span>原始任务</span><span>CU {{ cu?.index }}</span><span>group_{{ cu?.groups.find(group => group.id === store.selectedEvent?.groupId)?.index ?? 0 }}</span></div>
           <button class="locate-button" @click="locate"><Crosshair :size="13" />定位到此事件<ArrowUpRight :size="13" /></button>
           <dl class="detail-list"><div><dt>开始时间</dt><dd>{{ formatTime(store.selectedEvent.start) }}</dd></div><div><dt>结束时间</dt><dd>{{ formatTime(store.selectedEvent.end) }}</dd></div><div><dt>持续时间</dt><dd class="text-accent">{{ formatTime(store.selectedEvent.end - store.selectedEvent.start) }}</dd></div><div><dt>计算卡</dt><dd>{{ eventSource?.device.label }}</dd></div><div><dt>原始轨道</dt><dd>#{{ store.selectedEvent.trackId }}</dd></div><div><dt>记录 ID</dt><dd>#{{ store.selectedEvent.id }}</dd></div></dl>
@@ -40,7 +40,7 @@ function locate(): void { if (!store.selectedEvent) return; store.seek(store.sel
         </template>
       </template>
       <template v-else-if="tab === 'range'">
-        <div class="inspector-heading"><Crosshair :size="16" /><h3>区间统计</h3><button v-if="range" class="icon-button" aria-label="清除选区" @click="store.setSelection(null)"><X :size="14" /></button></div>
+        <div class="inspector-heading"><Crosshair :size="16" /><h3>区间统计</h3><button v-if="range" type="button" class="icon-button" aria-label="清除选区" title="清除选区" @click="store.setSelection(null)"><X :size="14" /></button></div>
         <template v-if="range"><div class="time-hero">{{ formatTime(range.end - range.start) }}</div><dl class="detail-list"><div><dt>区间开始</dt><dd>{{ formatTime(range.start) }}</dd></div><div><dt>区间结束</dt><dd>{{ formatTime(range.end) }}</dd></div><div><dt>覆盖事件</dt><dd>{{ store.statisticsLoading ? '计算中…' : store.selectionStats?.count.toLocaleString() ?? '—' }}</dd></div><div><dt>累计事件耗时</dt><dd>{{ store.selectionStats ? formatTime(store.selectionStats.sumDuration) : '—' }}</dd></div><div><dt>记录活动并集</dt><dd>{{ store.selectionStats && store.selectionStats.unionDuration >= 0n ? formatTime(store.selectionStats.unionDuration) : store.sources.length > 1 ? '多来源独立统计' : '—' }}</dd></div></dl><div class="inspector-actions"><button class="subtle-button" @click="store.activeView = 'utilization'">查看 CU 利用率</button><button class="subtle-button" @click="store.zoomSelection()">缩放到选区</button><button class="subtle-button" :class="{ selected: store.looping }" @click="store.toggleLoop()">{{ store.looping ? '关闭循环' : '循环此区间' }}</button></div><div class="notice"><Info :size="14" />事件裁剪到选区边界；累计耗时包含并发，可以大于区间长度。</div></template>
         <div v-else class="empty-inspector"><Crosshair :size="26" /><h4>选择一段时间</h4><p>在时间轴轨道区拖动框选，即可查看事件数量和耗时。</p></div>
       </template>

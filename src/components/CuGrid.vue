@@ -81,14 +81,14 @@ function move(event: PointerEvent): void {
   const events = store.activeByCu.get(cu.id) ?? []
   hovered.value = { index, text: events.length ? events.slice(0, 4).map(event => event.name).join(' · ') : '当前位置无记录任务', left: event.offsetX, top: event.offsetY }
 }
-function select(event: PointerEvent): void { const index = hit(event); if (index >= 0) store.selectCu(props.device.cus[index]!.id) }
+function select(event: PointerEvent): void { const index = hit(event); if (index >= 0) store.selectCu(props.device.cus[index]!.id, true) }
 function keyboard(event: KeyboardEvent): void {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter'].includes(event.key)) return
   event.preventDefault()
   event.stopPropagation()
   const current = Math.max(0, props.device.cus.findIndex(cu => cu.id === store.selectedCuId))
   const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowDown' ? columns : event.key === 'ArrowUp' ? -columns : 0
-  store.selectCu(props.device.cus[Math.max(0, Math.min(props.device.cus.length - 1, current + delta))]!.id)
+  store.selectCu(props.device.cus[Math.max(0, Math.min(props.device.cus.length - 1, current + delta))]!.id, event.key === 'Enter')
 }
 watch(() => [store.activeEvents, store.selectedCuId, props.device], schedule)
 watch(resolvedTheme, schedule)

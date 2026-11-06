@@ -116,7 +116,7 @@ function requests(timePadding = 0n, rowPadding = 0): TimelineRequest[] {
   const visible = visibleRows(rowPadding).filter(row => row.kind !== 'device')
   const range = { start: store.viewport.start - timePadding > store.bounds.start ? store.viewport.start - timePadding : store.bounds.start, end: store.viewport.end + timePadding < store.bounds.end ? store.viewport.end + timePadding : store.bounds.end }
   const resolution = Number(duration(store.viewport)) / plotWidth()
-  return store.sources.map(source => ({ source, range, resolution, density: resolution > 18000, trackIds: [...new Set(visible.filter(row => row.sourceId === source.source.metadata.id).flatMap(row => row.trackIds))] })).filter(request => request.trackIds.length)
+  return store.displayedSources.map(source => ({ source, range, resolution, density: resolution > 18000, trackIds: [...new Set(visible.filter(row => row.sourceId === source.source.metadata.id).flatMap(row => row.trackIds))] })).filter(request => request.trackIds.length)
 }
 
 function updateData(): void {
@@ -317,7 +317,7 @@ function drawOverview(): void {
 }
 
 function pointerDown(event: PointerEvent): void {
-  if (!store.sources.length || ![0, 1, 2].includes(event.button)) return
+  if (!store.displayedSources.length || ![0, 1, 2].includes(event.button)) return
   stopMotion()
   store.stopZoom()
   const point = position(event)
@@ -325,7 +325,7 @@ function pointerDown(event: PointerEvent): void {
   const pan = event.button === 1 || event.button === 2 || store.spaceHeld
   if (point.x < gutter && !pan) {
     const row = store.rows[Math.floor((point.y - ruler + scrollTop.value) / rowHeight)]
-    if (row?.kind === 'group') { store.toggleGroup(row.id); if (row.cuId) store.selectCu(row.cuId) }
+    if (row?.kind === 'group') { store.toggleGroup(row.id); if (row.cuId) store.selectCu(row.cuId, true) }
     return
   }
   const hit = [...hits].reverse().find(hit => point.x >= hit.left && point.x <= hit.right && point.y >= hit.top && point.y <= hit.bottom)
@@ -393,7 +393,7 @@ function wheel(event: WheelEvent): void {
 }
 function scroll(): void { scrollTop.value = scroller.value?.scrollTop ?? 0; invalidate() }
 function overviewDown(event: PointerEvent): void {
-  if (!store.sources.length) return
+  if (!store.displayedSources.length) return
   stopMotion()
   overviewHover.value = null
   store.stopZoom()
@@ -425,9 +425,17 @@ function overviewMove(event: PointerEvent): void {
 function overviewUp(event: PointerEvent): void { overviewGesture = null; if (overviewCanvas.value?.hasPointerCapture(event.pointerId)) overviewCanvas.value.releasePointerCapture(event.pointerId) }
 
 watch(() => [store.viewport, store.rows, store.loading], invalidate)
-watch(() => store.sources, () => { stopMotion(); queryVersion++; cache.clear(); invalidate() })
+watch(() => store.displayedSources, () => { stopMotion(); queryVersion++; cache.clear(); invalidate() })
 watch(() => [store.currentTime, store.selection, store.bookmarks], scheduleOverlay, { deep: false })
 watch(() => [store.selectedEvent, store.selectedCuId], scheduleBackground)
+watch(() => store.timelineFocus, target => {
+  if (!target || !scroller.value) return
+  const index = store.rows.findIndex(row => row.kind === 'device' && row.sourceId === target.sourceId)
+  if (index < 0) return
+  verticalMotion.cancel()
+  scroller.value.scrollTop = index * rowHeight
+  scroll()
+}, { flush: 'post' })
 watch(resolvedTheme, () => { labelWidths.clear(); scheduleBackground() })
 watch(() => [store.overview, store.overviewMetric, store.overviewActivity], () => { overviewHover.value = null; updateData(); scheduleBackground() })
 watch(() => store.selectedCuId, id => {
@@ -447,7 +455,7 @@ onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.s
 
 <template>
   <section class="timeline" aria-label="推理重放时间轴">
-    <div class="timeline-heading"><div class="section-label"><span class="tiny-dot blue" />时间轴<span class="timeline-mode">{{ dense ? '密度聚合' : '原始区间' }}</span></div><div class="timeline-heading-actions"><span>{{ formatTime(store.viewport.end - store.viewport.start) }} 可视范围</span><button class="icon-button" aria-label="缩小时间轴" title="缩小 · S" @click="store.zoom(2)"><Minus :size="14" /></button><button class="icon-button" aria-label="放大时间轴" title="放大 · W" @click="store.zoom(0.5)"><Plus :size="14" /></button><span class="toolbar-divider" /><button class="icon-button" aria-label="适配全部时间" title="适配全部时间 · F" @click="store.fit()"><Expand :size="14" /></button><button class="icon-button" aria-label="缩放到选区" title="缩放到选区 · Z" @click="store.zoomSelection()"><Focus :size="14" /></button><button class="icon-button" :class="{ selected: store.following }" aria-label="跟随播放头" :aria-pressed="store.following" title="跟随播放头" @click="store.following = !store.following"><Crosshair :size="14" /></button></div></div>
+    <div class="timeline-heading"><div class="section-label"><span class="tiny-dot blue" />时间轴<span class="timeline-mode">{{ dense ? '密度聚合' : '原始区间' }}</span></div><div class="timeline-heading-actions"><span>{{ formatTime(store.viewport.end - store.viewport.start) }} 可视范围</span><button class="icon-button" aria-label="缩小时间轴" :disabled="!store.displayedSources.length" title="缩小 · S" @click="store.zoom(2)"><Minus :size="14" /></button><button class="icon-button" aria-label="放大时间轴" :disabled="!store.displayedSources.length" title="放大 · W" @click="store.zoom(0.5)"><Plus :size="14" /></button><span class="toolbar-divider" /><button class="icon-button" aria-label="适配全部时间" :disabled="!store.displayedSources.length" title="适配全部时间 · F" @click="store.fit()"><Expand :size="14" /></button><button class="icon-button" aria-label="缩放到选区" :disabled="!store.displayedSources.length || !store.selection" title="缩放到选区 · Z" @click="store.zoomSelection()"><Focus :size="14" /></button><button class="icon-button" :class="{ selected: store.following }" aria-label="跟随播放头" :disabled="!store.displayedSources.length" :aria-pressed="store.following" title="跟随播放头" @click="store.following = !store.following"><Crosshair :size="14" /></button></div></div>
     <div class="timeline-overview-strip">
       <canvas ref="overviewCanvas" class="timeline-overview" height="34" role="img" :aria-label="`${store.overviewMetric === 'density' ? '全局任务密度' : '全局任务利用率'}与可视窗口，可拖动边缘缩放`" :aria-busy="store.overviewActivityLoading" @pointerdown="overviewDown" @pointermove="overviewMove" @pointerup="overviewUp" @pointercancel="overviewUp" @pointerleave="overviewHover = null" />
       <div class="timeline-overview-controls">
@@ -466,7 +474,7 @@ onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.s
       <div ref="scroller" class="timeline-vertical-scroller" @scroll="scroll" @wheel.prevent="wheel" @pointerdown="stopMotion"><div :style="{ height: `${store.rows.length * rowHeight + ruler}px` }" /></div>
       <div v-if="querying" class="timeline-query-loading"><LoaderCircle :size="12" class="spin" />更新窗口</div>
       <div v-if="tooltip && !gesture" class="canvas-tooltip timeline-tooltip" :style="{ left: `${tooltip.left}px`, top: `${tooltip.top}px` }"><strong>{{ tooltip.label }}</strong><span>{{ tooltip.description }}</span></div>
-      <div v-if="!store.sources.length && !store.loading" class="timeline-empty"><Focus :size="27" /><span>导入 trace，开始探索推理过程</span></div>
+      <div v-if="!store.displayedSources.length && !store.loading" class="timeline-empty"><Focus :size="27" /><span>{{ store.sources.length ? '在左侧勾选要显示的文件' : '导入 trace，开始探索推理过程' }}</span></div>
     </div>
     <div class="timeline-footer"><span><span class="tiny-dot" />{{ store.rows.length }} 条展示轨道 · {{ dense ? '放大查看独立任务' : '点击事件查看详情' }}</span><span>W / S 缩放<span class="footer-dot">·</span>A / D 平移<span class="footer-dot">·</span>右键 拖动<span class="footer-dot">·</span>左键 框选</span></div>
   </section>

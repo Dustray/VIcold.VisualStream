@@ -1,0 +1,83 @@
+import { expect, test, type Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { openSettings, openWorkspace } from './workspace'
+import type { ProjectSnapshot } from '../../src/core/types'
+
+async function project(page: Page): Promise<ProjectSnapshot> {
+  const downloading = page.waitForEvent('download')
+  await page.getByRole('button', { name: '保存项目', exact: true }).click()
+  const filename = await (await downloading).path()
+  return JSON.parse(await readFile(filename!, 'utf8')) as ProjectSnapshot
+}
+
+test('compact titlebar groups actions and settings support narrow windows and keyboard focus', async ({ page }) => {
+  await page.goto('/')
+  const header = page.locator('.app-header')
+  await expect(header).toHaveCSS('height', '40px')
+  await expect(header.locator('.brand')).toHaveText('VisualStream')
+  await expect(header.locator('.brand-version')).toHaveCount(0)
+  await expect(header.locator('.header-separator')).toHaveText('|')
+  await expect(header.getByRole('combobox', { name: '界面主题' })).toHaveCount(0)
+  await expect(header.getByRole('group', { name: '项目操作' }).getByRole('button')).toHaveCount(2)
+  await expect(header.getByRole('group', { name: '应用选项' }).getByRole('button')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: '缩放到选区', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '放大时间轴', exact: true })).toBeDisabled()
+  await expect(page.getByRole('combobox', { name: '筛选计算卡', exact: true })).toBeDisabled()
+  await page.setViewportSize({ width: 1040, height: 640 })
+  expect(await header.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await openSettings(page)
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true })
+  await expect(dialog).toHaveCSS('width', '760px')
+  const appearance = dialog.getByRole('tab', { name: '界面主题', exact: true })
+  const session = dialog.getByRole('tab', { name: '会话设置', exact: true })
+  await expect(appearance).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.getByRole('combobox', { name: '界面主题' }).locator('option')).toHaveCount(4)
+  await dialog.getByRole('combobox', { name: '界面主题' }).selectOption('light')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.screenshot({ path: '.local/screenshots/settings-appearance-light.png' })
+  await appearance.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(session).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.getByRole('textbox', { name: '时间位置（ms）' })).toBeVisible()
+  for (let index = 0; index < 12; index++) {
+    await page.keyboard.press('Tab')
+    expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true)
+  }
+  const bounds = await dialog.boundingBox()
+  expect(bounds!.y).toBeGreaterThanOrEqual(0)
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(640)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeFocused()
+  await page.reload()
+  await openSettings(page)
+  await expect(dialog.getByRole('combobox', { name: '界面主题' })).toHaveValue('light')
+})
+
+test('closing settings preserves the replay selection and alignment opens session settings directly', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await openWorkspace(page, 'dual')
+  const timeline = await page.locator('.timeline-overlay').boundingBox()
+  if (!timeline) throw new Error('Timeline is missing')
+  await page.mouse.move(timeline.x + 300, timeline.y + 95)
+  await page.mouse.down()
+  await page.mouse.move(timeline.x + 550, timeline.y + 95, { steps: 8 })
+  await page.mouse.up()
+  const before = await project(page)
+  expect(before.selection).not.toBeNull()
+  await openSettings(page, '会话设置')
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true })
+  await expect(dialog.locator('.source-offset')).toHaveCount(2)
+  await page.keyboard.press('Escape')
+  const after = await project(page)
+  expect(after.selection).toEqual(before.selection)
+  expect(after.viewport).toEqual(before.viewport)
+  expect(after.time).toBe(before.time)
+  await page.getByRole('button', { name: '配置时钟对齐', exact: true }).click()
+  await expect(dialog.getByRole('tab', { name: '会话设置', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.screenshot({ path: '.local/screenshots/settings-session.png' })
+  await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click()
+  await page.screenshot({ path: '.local/screenshots/compact-workbench.png' })
+  expect(errors).toEqual([])
+})

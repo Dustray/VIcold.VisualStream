@@ -1,6 +1,17 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile, copyFile, readdir, stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { resolve, sep } from 'node:path'
+
+const workspaceDirectory = resolve('.')
+const legacySamples = resolve('public/samples')
+const retiredSamples = resolve('.local', `retired-samples-${Date.now()}`)
+if (!legacySamples.startsWith(workspaceDirectory + sep) || !retiredSamples.startsWith(workspaceDirectory + sep)) throw new Error('Sample asset paths must stay inside the workspace')
+try {
+  await stat(legacySamples)
+  await mkdir(resolve('.local'), { recursive: true })
+  await rename(legacySamples, retiredSamples)
+  console.log('Retired legacy sample assets.')
+} catch (error) { if (error.code !== 'ENOENT') throw error }
 
 const directory = resolve('public/vendor/perfetto')
 await mkdir(directory, { recursive: true })
@@ -62,13 +73,3 @@ if (!manifest.files['trace_processor_memory64.wasm']) {
   manifest.files[name] = { bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex') }
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2))
 }
-
-const samplesDirectory = resolve('public/samples')
-await mkdir(samplesDirectory, { recursive: true })
-const files = []
-for (const name of (await readdir('trace_demo')).filter(name => name.endsWith('.perfetto-trace')).sort()) {
-  await copyFile(resolve('trace_demo', name), resolve(samplesDirectory, name))
-  files.push({ name, bytes: (await stat(resolve('trace_demo', name))).size, url: `/samples/${name}` })
-}
-await writeFile(resolve(samplesDirectory, 'manifest.json'), JSON.stringify({ files }, null, 2))
-console.log(`Prepared ${files.length} real sample traces.`)

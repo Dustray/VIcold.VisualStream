@@ -23,7 +23,7 @@ if not exist "node_modules\.bin\tauri.cmd" (
   if errorlevel 1 goto failed
 )
 
-echo [VisualStream] Starting the desktop app...
+echo [VisualStream] Starting the Debug desktop app with hot reload...
 echo [VisualStream] Keep this window open. Press Ctrl+C to stop.
 call npm.cmd run desktop
 if errorlevel 1 goto failed

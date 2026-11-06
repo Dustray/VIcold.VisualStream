@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { openSettings, openWorkspace, importTraces } from './workspace'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -12,7 +13,7 @@ async function ready(page: import('@playwright/test').Page, count = '128,200') {
 test('real TP1 replay links CU, search, zoom, selection, playback and project restore', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
   await expect(page.locator('.device-heading')).toContainText('76 个已记录 CU')
   await expect(page.locator('.timeline-mode')).toHaveText('密度聚合')
@@ -23,7 +24,7 @@ test('real TP1 replay links CU, search, zoom, selection, playback and project re
   const before = await page.getByTestId('playback-time').innerText()
   await expect.poll(() => page.getByTestId('playback-time').innerText()).not.toBe(before)
   await page.getByRole('button', { name: '暂停重放', exact: true }).click()
-  await page.getByRole('slider', { name: '重放速度' }).fill('2')
+  await page.getByRole('slider', { name: '重放速度' }).fill('4')
   await page.getByRole('textbox', { name: '搜索任务或事件' }).fill('TASK_RMS_NORM')
   await expect(page.locator('.search-result').first()).toBeVisible()
   await page.locator('.search-result').first().click()
@@ -63,7 +64,7 @@ test('real TP1 replay links CU, search, zoom, selection, playback and project re
   await page.getByTestId('project-input').setInputFiles(file)
   await expect(page.locator('.toast')).toContainText('已恢复')
   await expect(page.getByTestId('playback-time').locator('strong')).toHaveText(savedTime)
-  await expect(page.getByRole('slider', { name: '重放速度' })).toHaveValue('2')
+  await expect(page.getByRole('slider', { name: '重放速度' })).toHaveValue('4')
   await expect(page.locator('.bookmark-list')).toContainText('标记 1')
   await expect(page.getByRole('button', { name: '循环选区', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await page.getByRole('button', { name: '硬件指标', exact: true }).click()
@@ -72,7 +73,7 @@ test('real TP1 replay links CU, search, zoom, selection, playback and project re
 })
 
 test('timeline zoom, pan, overview resize and scrub persist exact coordinates', async ({ page }) => {
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
   const readProject = async () => {
     await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
@@ -115,9 +116,9 @@ test('timeline zoom, pan, overview resize and scrub persist exact coordinates', 
 test('real TP2 keeps two cards separate, supports upload deduplication and invalid-file errors', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await openWorkspace(page)
   await ready(page)
-  await page.getByRole('button', { name: 'TP2 · 双卡' }).click()
+  await importTraces(page, 'dual', true)
   await ready(page, '445,328')
   await expect(page.locator('.device-section')).toHaveCount(2)
   await expect(page.locator('.app-footer')).toContainText('152 CU')
@@ -129,7 +130,7 @@ test('real TP2 keeps two cards separate, supports upload deduplication and inval
   await page.getByTestId('trace-input').setInputFiles({ name: 'invalid.perfetto-trace', mimeType: 'application/octet-stream', buffer: Buffer.from('invalid trace') })
   await expect(page.locator('.toast.error')).toBeVisible()
   await expect(page.locator('.file-entry')).toHaveCount(2)
-  await page.getByRole('button', { name: '会话设置', exact: true }).click()
+  await openSettings(page, '会话设置')
   const offset = page.getByRole('spinbutton').last()
   await offset.fill('1.25')
   await offset.blur()

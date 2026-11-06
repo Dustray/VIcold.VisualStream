@@ -1,7 +1,8 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openWorkspace } from './workspace'
 
 async function ready(page: Page): Promise<void> {
-  await page.goto('/')
+  await openWorkspace(page)
   await expect(page.locator('.sidebar-info')).toContainText('128,200')
   await expect(page.locator('.import-progress')).toHaveCount(0)
   await expect(page.locator('.timeline-query-loading')).toHaveCount(0)

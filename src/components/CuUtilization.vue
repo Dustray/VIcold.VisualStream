@@ -37,10 +37,10 @@ function refresh(): void {
   if (timer) clearTimeout(timer)
   statistics.value = null
   error.value = ''
-  loading.value = !!store.sources.length
-  if (!store.sources.length) return
+  loading.value = !!store.displayedSources.length
+  if (!store.displayedSources.length) return
   const period = { ...range.value }
-  const queries = store.sources.map(source => ({ source, key: `${source.source.metadata.id}:${source.offset}:${period.start}:${period.end}` }))
+  const queries = store.displayedSources.map(source => ({ source, key: `${source.source.metadata.id}:${source.offset}:${period.start}:${period.end}` }))
   timer = setTimeout(async () => {
     timer = null
     try {
@@ -61,7 +61,7 @@ function refresh(): void {
 }
 
 watch(() => store.selection, value => { scope.value = value ? 'selection' : 'full' })
-watch([() => store.sources, range], refresh, { immediate: true })
+watch([() => store.displayedSources, range], refresh, { immediate: true })
 onBeforeUnmount(() => { generation++; if (timer) clearTimeout(timer) })
 </script>
 
@@ -76,7 +76,7 @@ onBeforeUnmount(() => { generation++; if (timer) clearTimeout(timer) })
       <span v-if="loading" class="utilization-loading" role="status"><LoaderCircle :size="13" class="spin" />正在统计…</span>
     </div>
     <div class="utilization-description"><Info :size="13" /><p>按任务记录估算：每个 CU 的活动时间并集 ÷ 统计时长。重叠任务只计一次，未记录任务的时段按无活动计；仅包含已记录 CU，不代表硬件计数器测得的计算单元忙碌率。</p></div>
-    <div v-if="!store.sources.length" class="utilization-empty">导入记录后即可查看 CU 利用率。</div>
+    <div v-if="!store.displayedSources.length" class="utilization-empty">{{ store.sources.length ? '在左侧勾选文件后查看 CU 利用率。' : '导入记录后即可查看 CU 利用率。' }}</div>
     <div v-else-if="error" class="utilization-error" role="alert"><p>利用率统计失败：{{ error }}</p><button class="subtle-button" @click="refresh">重新计算</button></div>
     <template v-else>
       <div class="utilization-summary">
@@ -92,7 +92,7 @@ onBeforeUnmount(() => { generation++; if (timer) clearTimeout(timer) })
       <div class="utilization-table-scroll">
         <table class="utilization-table"><thead><tr><th>CU</th><th>计算卡</th><th>利用率</th><th>活动时间</th><th>无记录任务</th><th>任务数量</th></tr></thead>
           <tbody><tr v-for="item in items" :key="item.cuId" :class="{ selected: item.cuId === store.selectedCuId }" :data-cu-id="item.cuId">
-            <td><button :aria-label="`选择 ${deviceLabel(item.deviceId)} CU ${item.index}`" :aria-pressed="item.cuId === store.selectedCuId" @click="store.selectCu(item.cuId)">CU {{ String(item.index).padStart(2, '0') }}</button></td><td>{{ deviceLabel(item.deviceId) }}</td>
+            <td><button :aria-label="`选择 ${deviceLabel(item.deviceId)} CU ${item.index}`" :aria-pressed="item.cuId === store.selectedCuId" @click="store.selectCu(item.cuId, true)">CU {{ String(item.index).padStart(2, '0') }}</button></td><td>{{ deviceLabel(item.deviceId) }}</td>
             <td><div class="utilization-value"><div class="utilization-meter" role="meter" :aria-label="`${deviceLabel(item.deviceId)} CU ${item.index} 利用率`" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="item.ratio === null ? undefined : (item.ratio * 100).toFixed(4)"><i :style="{ width: `${(item.ratio ?? 0) * 100}%` }" /></div><span>{{ percent(item.ratio) }}</span></div></td>
             <td class="utilization-busy" :title="`${item.busyDuration} ns`">{{ formatTime(item.busyDuration) }}</td><td :title="`${item.idleDuration} ns`">{{ formatTime(item.idleDuration) }}</td><td>{{ item.eventCount.toLocaleString() }}</td>
           </tr></tbody>

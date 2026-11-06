@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
+import { openSettings, openWorkspace } from './workspace'
 import { readFile } from 'node:fs/promises'
 import type { ProjectSnapshot } from '../../src/core/types'
 
 async function ready(page: Page): Promise<void> {
-  await page.goto('/')
+  await openWorkspace(page)
   await expect(page.locator('.sidebar-info')).toContainText('128,200')
   await expect(page.locator('.import-progress')).toHaveCount(0)
   await expect(page.locator('.summary-grid strong').first()).not.toHaveText('0')
@@ -21,7 +22,7 @@ async function project(page: Page): Promise<ProjectSnapshot> {
 
 function width(snapshot: ProjectSnapshot): bigint { return BigInt(snapshot.viewport.end) - BigInt(snapshot.viewport.start) }
 
-test('A and D animate the viewport, accumulate held keys, and yield to direct navigation', async ({ page }) => {
+test('A and D animate the viewport, accumulate short taps, and yield to direct navigation', async ({ page }) => {
   await page.addInitScript(() => {
     const positions: number[] = []
     ;(window as unknown as { panPositions: number[] }).panPositions = positions
@@ -58,10 +59,9 @@ test('A and D animate the viewport, accumulate held keys, and yield to direct na
   expect(positions.some(position => position > start && position < end)).toBe(true)
   await page.keyboard.press('a')
   expect((await project(page)).viewport).toEqual(initial.viewport)
-  await page.keyboard.down('d')
-  await page.keyboard.down('d')
-  await page.keyboard.down('d')
-  await page.keyboard.up('d')
+  await page.keyboard.press('d')
+  await page.keyboard.press('d')
+  await page.keyboard.press('d')
   const repeated = await project(page)
   expect(BigInt(repeated.viewport.start)).toBe(BigInt(initial.viewport.start) + distance * 3n)
   expect(width(repeated)).toBe(width(initial))
@@ -73,6 +73,78 @@ test('A and D animate the viewport, accumulate held keys, and yield to direct na
   expect(BigInt(fitted.viewport.start)).toBe(0n)
   expect(width(fitted)).toBe(width(initial) * 4n)
   await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
+})
+
+async function framesFor(page: Page, milliseconds: number): Promise<void> {
+  await page.evaluate(milliseconds => new Promise<void>(resolve => {
+    const end = performance.now() + milliseconds
+    const frame = (wall: number) => { if (wall >= end) resolve(); else requestAnimationFrame(frame) }
+    requestAnimationFrame(frame)
+  }), milliseconds)
+}
+
+test('holding WASD keeps moving without repeated keydown events and preserves the pointer anchor', async ({ page }) => {
+  await ready(page)
+  for (let index = 0; index < 2; index++) {
+    await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
+    await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
+  }
+  for (let index = 0; index < 7; index++) await page.keyboard.press('d')
+  const initial = await project(page)
+  const canvas = (await page.locator('.timeline-overlay').boundingBox())!
+  const horizontal = Math.floor(170 + (canvas.width - 183) * 0.7)
+  const ratio = (horizontal - 170) / (canvas.width - 183)
+  const anchor = (snapshot: ProjectSnapshot) => BigInt(snapshot.viewport.start) + BigInt(Math.round(Number(width(snapshot)) * ratio))
+  let previous = initial
+  for (const key of ['w', 's', 'a', 'd']) {
+    await page.mouse.move(canvas.x + horizontal, canvas.y + 15)
+    await page.keyboard.down(key)
+    await framesFor(page, 400)
+    await page.keyboard.up(key)
+    const after = await project(page)
+    if (key === 'w' || key === 's') {
+      if (key === 'w') expect(width(after)).toBeLessThan(width(previous) * 65n / 100n)
+      else expect(width(after)).toBeGreaterThan(width(previous) * 16n / 10n)
+      expect(Number(anchor(after) - anchor(previous))).toBeLessThanOrEqual(8)
+      expect(Number(anchor(after) - anchor(previous))).toBeGreaterThanOrEqual(-8)
+    } else {
+      const distance = BigInt(after.viewport.start) - BigInt(previous.viewport.start)
+      expect(key === 'a' ? -distance : distance).toBeGreaterThan(width(previous) / 2n)
+      expect(width(after)).toBe(width(previous))
+    }
+    expect(after.time).toBe(initial.time)
+    expect(after.selection).toEqual(initial.selection)
+    previous = after
+  }
+})
+
+test('held navigation stops for text focus, window blur and direct navigation without sticky keys', async ({ page }) => {
+  await ready(page)
+  await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
+  await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
+  await page.keyboard.down('d')
+  await framesFor(page, 150)
+  await page.getByRole('textbox', { name: '搜索任务或事件' }).focus()
+  const focused = await project(page)
+  await framesFor(page, 300)
+  expect((await project(page)).viewport).toEqual(focused.viewport)
+  await page.keyboard.up('d')
+  await page.keyboard.down('w')
+  await framesFor(page, 150)
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')))
+  const blurred = await project(page)
+  await page.keyboard.down('w')
+  await framesFor(page, 300)
+  expect((await project(page)).viewport).toEqual(blurred.viewport)
+  await page.keyboard.up('w')
+  await page.keyboard.down('d')
+  await framesFor(page, 150)
+  await page.keyboard.press('f')
+  const fitted = await project(page)
+  await framesFor(page, 300)
+  expect((await project(page)).viewport).toEqual(fitted.viewport)
+  await page.keyboard.up('d')
+  expect(fitted.viewport.start).toBe('0')
 })
 
 test('keyboard and wheel zoom keep the pointer time fixed independently of the playhead and selection', async ({ page }) => {
@@ -219,6 +291,9 @@ test('WASD, slow speeds and global Space work with control focus while text inpu
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await ready(page)
+  const timeline = await page.locator('.timeline-overlay').boundingBox()
+  if (!timeline) throw new Error('Timeline is missing')
+  await page.mouse.click(timeline.x + 170 + (timeline.width - 183) / 2, timeline.y + 15)
   await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
   await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
   const original = await project(page)
@@ -269,8 +344,8 @@ test('WASD, slow speeds and global Space work with control focus while text inpu
   expect((await project(page)).viewport).toEqual(original.viewport)
   await search.fill('')
 
-  await page.getByRole('button', { name: '会话设置', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '会话设置' })
+  await openSettings(page, '会话设置')
+  const dialog = page.getByRole('dialog', { name: '设置' })
   await dialog.getByRole('button', { name: '关闭对话框' }).focus()
   await page.keyboard.press('Space')
   await expect(page.getByRole('button', { name: '暂停重放', exact: true })).toBeVisible()

@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from './types'
+import { openWorkspaceDatabase } from './database'
 
 export function parseProject(text: string): ProjectSnapshot {
   const value = JSON.parse(text) as ProjectSnapshot
@@ -11,35 +12,27 @@ export function parseProject(text: string): ProjectSnapshot {
   if (value.selection && (!timestamp(value.selection.start) || !timestamp(value.selection.end) || BigInt(value.selection.end) <= BigInt(value.selection.start))) throw new Error('项目选区无效')
   if (!Array.isArray(value.bookmarks) || value.bookmarks.length > 1000 || value.bookmarks.some(bookmark => typeof bookmark.id !== 'string' || typeof bookmark.label !== 'string' || !timestamp(bookmark.time))) throw new Error('项目书签无效')
   if (typeof value.loop !== 'boolean') throw new Error('项目循环配置无效')
+  if (value.visibleSources !== undefined && (!Array.isArray(value.visibleSources) || value.visibleSources.some(fingerprint => !value.sources.some(source => source.fingerprint === fingerprint)))) throw new Error('项目文件显示配置无效')
   return value
 }
 
 export async function persistProject(snapshot: ProjectSnapshot): Promise<void> {
+  const database = await openWorkspaceDatabase()
   await new Promise<void>((resolve, reject) => {
-    const request = indexedDB.open('visualstream', 1)
-    request.onupgradeneeded = () => request.result.createObjectStore('projects')
-    request.onerror = () => reject(request.error)
-    request.onsuccess = () => {
-      const database = request.result
-      const transaction = database.transaction('projects', 'readwrite')
-      transaction.objectStore('projects').put(snapshot, 'last')
-      transaction.oncomplete = () => { database.close(); resolve() }
-      transaction.onerror = () => { database.close(); reject(transaction.error) }
-    }
+    const transaction = database.transaction('projects', 'readwrite')
+    transaction.objectStore('projects').put(snapshot, 'last')
+    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.onerror = () => { database.close(); reject(transaction.error) }
   })
 }
 
 export async function readLastProject(): Promise<ProjectSnapshot | null> {
+  const database = await openWorkspaceDatabase().catch(() => null)
+  if (!database) return null
   return new Promise(resolve => {
-    const request = indexedDB.open('visualstream', 1)
-    request.onupgradeneeded = () => request.result.createObjectStore('projects')
-    request.onerror = () => resolve(null)
-    request.onsuccess = () => {
-      const database = request.result
-      const transaction = database.transaction('projects', 'readonly')
-      const record = transaction.objectStore('projects').get('last')
-      record.onsuccess = () => { const result = record.result as ProjectSnapshot | undefined; database.close(); resolve(result ?? null) }
-      record.onerror = () => { database.close(); resolve(null) }
-    }
+    const transaction = database.transaction('projects', 'readonly')
+    const record = transaction.objectStore('projects').get('last')
+    record.onsuccess = () => { const result = record.result as ProjectSnapshot | undefined; database.close(); resolve(result ?? null) }
+    record.onerror = () => { database.close(); resolve(null) }
   })
 }
