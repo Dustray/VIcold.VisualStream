@@ -8,11 +8,15 @@ import Inspector from './components/Inspector.vue'
 import Timeline from './components/Timeline.vue'
 import PlaybackSpeed from './components/PlaybackSpeed.vue'
 import ThemeSelect from './components/ThemeSelect.vue'
+import WindowControls from './components/WindowControls.vue'
 import { duration, formatBytes, formatTime, parseMilliseconds } from './core/time'
 import { operatorColor as eventColor } from './core/theme'
 import { useReplayStore } from './stores/replay'
+import { workspaceHost } from './host'
 
 const store = useReplayStore()
+const host = workspaceHost()
+const pickingFiles = ref(false)
 const traceInput = ref<HTMLInputElement | null>(null)
 const projectInput = ref<HTMLInputElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -33,6 +37,26 @@ const copyableSelector = '[data-copyable], .event-title h3, .detail-list dd, .so
 
 async function filesSelected(event: Event): Promise<void> { const input = event.target as HTMLInputElement; const files = [...input.files ?? []]; input.value = ''; if (files.length) await store.importFiles(files) }
 async function projectSelected(event: Event): Promise<void> { const input = event.target as HTMLInputElement; const file = input.files?.[0]; input.value = ''; if (file) await store.openProject(file) }
+async function chooseTraceFiles(): Promise<void> {
+  if (pickingFiles.value || store.loading) return
+  if (!host.openTraceFiles) { traceInput.value?.click(); return }
+  pickingFiles.value = true
+  try {
+    const files = await host.openTraceFiles()
+    if (files?.length) await store.importFiles(files)
+  } catch (error) { store.notify(`打开记录失败：${error instanceof Error ? error.message : String(error)}`, 'error') }
+  finally { pickingFiles.value = false }
+}
+async function chooseProjectFile(): Promise<void> {
+  if (pickingFiles.value || store.loading) return
+  if (!host.openProjectFile) { projectInput.value?.click(); return }
+  pickingFiles.value = true
+  try {
+    const file = await host.openProjectFile()
+    if (file) await store.openProject(file)
+  } catch (error) { store.notify(`打开项目失败：${error instanceof Error ? error.message : String(error)}`, 'error') }
+  finally { pickingFiles.value = false }
+}
 function isFileDrag(event: DragEvent): boolean { return event.dataTransfer?.types.includes('Files') ?? false }
 function dragEnter(event: DragEvent): void { if (isFileDrag(event)) { event.preventDefault(); dragDepth.value++ } }
 function dragLeave(event: DragEvent): void { if (isFileDrag(event)) { event.preventDefault(); dragDepth.value = Math.max(0, dragDepth.value - 1) } }
@@ -134,17 +158,18 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
   <div class="app-shell" spellcheck="false" @dragenter="dragEnter" @dragleave="dragLeave" @dragover="dragOver" @drop="drop" @dragstart="preventNativeDrag" @selectstart="preventNativeSelection" @contextmenu="preventNativeSelection" @mousedown="preventAutoScroll" @pointerdown="clearTextSelection" @wheel="preventPageZoom">
     <input ref="traceInput" class="sr-only" type="file" multiple accept=".perfetto-trace,.pftrace,.trace,.pb" data-testid="trace-input" @change="filesSelected" />
     <input ref="projectInput" class="sr-only" type="file" accept=".json" data-testid="project-input" @change="projectSelected" />
-    <header class="app-header">
-      <div class="brand"><span class="brand-symbol"><Workflow :size="21" /></span><span>visualstream<span class="brand-version">PREVIEW</span></span></div>
+    <header class="app-header" :class="{ 'desktop-header': !!host.window }" :data-tauri-drag-region="host.window ? '' : undefined">
+      <div class="brand"><span class="brand-symbol"><Workflow :size="21" /></span><span>visualstream<span class="brand-version">{{ host.kind === 'desktop' ? 'DESKTOP' : 'PREVIEW' }}</span></span></div>
       <div class="header-section"><span class="header-slash">/</span><span class="header-workspace">推理重放工作台</span><span class="mode-tag"><Layers3 :size="12" />Megakernel</span></div>
-      <div class="header-actions"><ThemeSelect /><span class="local-status"><ShieldCheck :size="13" />本地解析</span><span class="header-divider" /><button class="icon-button" title="打开项目" aria-label="打开项目" @click="projectInput?.click()"><FolderOpen :size="17" /></button><Button variant="secondary" size="sm" :disabled="!store.sources.length" @click="store.saveProject()"><ArrowDownToLine :size="14" />保存项目</Button><button class="icon-button" title="快捷键与帮助" aria-label="快捷键与帮助" @click="modal = 'help'"><CircleHelp :size="17" /></button><button class="icon-button" title="会话设置" aria-label="会话设置" @click="modal = 'settings'"><Settings2 :size="17" /></button></div>
+      <div class="header-actions"><ThemeSelect /><span class="local-status"><ShieldCheck :size="13" />本地解析</span><span class="header-divider" /><button class="icon-button" title="打开项目" aria-label="打开项目" :disabled="pickingFiles || store.loading" @click="chooseProjectFile()"><FolderOpen :size="17" /></button><Button variant="secondary" size="sm" :disabled="!store.sources.length" @click="store.saveProject()"><ArrowDownToLine :size="14" />保存项目</Button><button class="icon-button" title="快捷键与帮助" aria-label="快捷键与帮助" @click="modal = 'help'"><CircleHelp :size="17" /></button><button class="icon-button" title="会话设置" aria-label="会话设置" @click="modal = 'settings'"><Settings2 :size="17" /></button></div>
+      <WindowControls v-if="host.window" :controls="host.window" @error="store.notify($event, 'error')" />
     </header>
 
     <div class="app-body">
       <aside class="sidebar">
         <div class="sidebar-title"><span>资源管理器</span><span class="small-caps">EXPLORER</span></div>
         <div class="import-configuration"><label>计算模式<select v-model="store.computeModelId" aria-label="导入计算模式" :disabled="store.loading"><option value="megakernel">Megakernel</option></select></label><label>文件解析<select v-model="store.sourceParserId" aria-label="导入文件解析器" :disabled="store.loading"><option value="perfetto">Perfetto</option><option value="auto">自动识别</option></select></label></div>
-        <Button class="import-button" variant="outline" :disabled="store.loading" @click="traceInput?.click()"><Plus :size="15" />导入 trace 文件<kbd>＋</kbd></Button>
+        <Button class="import-button" variant="outline" :disabled="store.loading || pickingFiles" @click="chooseTraceFiles()"><Plus :size="15" />导入 trace 文件<kbd>＋</kbd></Button>
         <div class="sidebar-section-heading"><span><ChevronDown :size="12" />当前会话</span><span class="count-badge">{{ store.sources.length }}</span></div>
         <div class="file-list">
           <div v-for="source in store.sources" :key="source.source.metadata.id" class="file-entry" :class="{ selected: store.selectedDeviceId === source.device.id }">
@@ -169,7 +194,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', spaceKeydown, tr
               <div class="view-toolbar"><div class="view-tabs"><button :class="{ active: store.activeView === 'resources' }" @click="store.activeView = 'resources'"><Grid2X2 :size="14" />资源矩阵</button><button :class="{ active: store.activeView === 'tasks' }" @click="store.activeView = 'tasks'"><Layers3 :size="14" />当前任务</button><button :class="{ active: store.activeView === 'utilization' }" @click="store.activeView = 'utilization'"><Activity :size="14" />CU 利用率</button><button :class="{ active: store.activeView === 'metrics' }" @click="store.activeView = 'metrics'"><Gauge :size="14" />硬件指标</button></div><select v-model="store.selectedDeviceId" class="device-select" aria-label="筛选计算卡"><option :value="null">所有计算卡</option><option v-for="device in store.devices" :key="device.id" :value="device.id">{{ device.label }}{{ device.rank === null ? '' : ` · Rank ${device.rank}` }}</option></select></div>
               <div v-if="store.activeView === 'resources'" class="hardware-scroll">
                 <div v-for="device in store.displayedDevices" :key="device.id" class="device-section"><div class="device-heading"><div class="device-icon"><Cpu :size="18" /></div><div><h2>{{ device.label }}<span v-if="device.rank !== null">Rank {{ device.rank }}</span></h2><p>Megakernel<span>·</span>{{ device.cus.length }} 个已记录 CU<span>·</span>{{ device.cus.reduce((total, cu) => total + cu.groups.length, 0) }} Groups</p></div><div class="device-activity"><span class="tiny-dot green" /><strong>{{ device.cus.filter(cu => store.activeByCu.has(cu.id)).length }}</strong><span>/ {{ device.cus.length }} 有任务</span></div></div><CuGrid :device="device" /></div>
-                <div v-if="!store.sources.length" class="hardware-empty"><div class="empty-symbol"><Workflow :size="32" /></div><h2>让推理过程清晰可见</h2><p>导入 Megakernel 的 Perfetto trace，<br />在时间与计算资源之间自由探索。</p><Button :disabled="store.loading" @click="traceInput?.click()"><Upload :size="15" />选择 trace 文件</Button></div>
+                <div v-if="!store.sources.length" class="hardware-empty"><div class="empty-symbol"><Workflow :size="32" /></div><h2>让推理过程清晰可见</h2><p>导入 Megakernel 的 Perfetto trace，<br />在时间与计算资源之间自由探索。</p><Button :disabled="store.loading || pickingFiles" @click="chooseTraceFiles()"><Upload :size="15" />选择 trace 文件</Button></div>
                 <div v-if="store.sources.length" class="grid-legend"><span><i class="legend-square active" />有记录任务</span><span><i class="legend-square" />无记录任务</span><span><i class="legend-square selected" />已选中</span><span class="legend-right">点击 CU 联动时间轴<span>·</span>颜色对应算子类型（忽略编号）</span></div>
               </div>
               <div v-else-if="store.activeView === 'tasks'" class="tasks-view"><div class="table-caption"><span>当前位置的记录任务</span><strong>{{ store.activeEvents.length }} 个活动区间</strong></div><table><thead><tr><th>任务名称</th><th>计算卡</th><th>CU</th><th>开始</th><th>持续时间</th></tr></thead><tbody><tr v-for="event in store.activeEvents.filter(event => !store.selectedDeviceId || event.deviceId === store.selectedDeviceId).slice(0, 100)" :key="`${event.sourceId}-${event.id}`" @click="store.selectEvent(event)"><td><span class="event-dot" :style="{ background: eventColor(event.name) }" />{{ event.name }}</td><td>{{ sourceForEvent(event.sourceId)?.device.label }}</td><td>{{ cuIndex(event.cuId) }}</td><td>{{ formatTime(event.start) }}</td><td>{{ formatTime(event.end - event.start) }}</td></tr></tbody></table><p v-if="!store.activeEvents.length" class="muted-description table-empty">当前位置没有记录任务。</p><p v-if="store.activeEvents.length > 100" class="muted-description">最多展示 100 个当前任务。</p></div>

@@ -1,12 +1,12 @@
 # VisualStream 推理重放设计
 
-日期：2026-11-05。状态：首版 MVP 已实现。本文保留完整设计和后续阶段，当前可运行范围、验证方式与限制以根目录 README 为准。
+更新：2026-11-06。状态：首版 MVP 已实现，增加 Tauri 2 桌面入口。本文保留完整设计和后续阶段，当前可运行范围、验证方式与限制以根目录 README 为准。
 
 ## 1. 产品目标与边界
 
 将已经采集的推理执行记录重放为可观察、可定位、可统计的时间过程。用户可以从任意时间开始播放，以统一播放头联动时间轴、资源视图、指标和事件详情。
 
-首版采用网站形态，优先支持桌面 Chrome / Edge，在浏览器本地处理用户文件。WASM、脚本等资源由产品一并提供。后续按需增加 Electron 桌面版本、本地原生解析服务和远程采集。
+同时提供网站与 Tauri 2 桌面形态，共用 Vue 3 + TypeScript 前端和 Perfetto WASM 解析流程。网站优先支持桌面 Chrome / Edge，Windows 客户端使用系统 WebView2。WASM、脚本等资源由产品一并提供。宿主文件能力通过 `WorkspaceHost` 适配；后续增加 VS Code 扩展适配、本地原生解析服务和远程采集。
 
 首版覆盖：
 
@@ -267,7 +267,7 @@ CU 已记录任务活动率不能直接称为算力利用率或 occupancy。通�
 | 后台处理 | Web Worker | 文件读取、解析、索引、查询与聚合 |
 | 数据传输 | 批量查询、TypedArray、transferable ArrayBuffer | 控制主线程负载和复制成本 |
 | 项目与设置 | IndexedDB + `.vstream.json` | 布局、书签、模式、文件引用与对齐 |
-| 桌面扩展 | 需要时使用 Electron | 复用 Chromium 界面，管理本地辅助进程 |
+| 桌面入口 | Tauri 2 + 系统 WebView | 复用现有前端，Rust 管理本地文件与后续辅助进程 |
 | 大文件扩展 | Perfetto 解析器可切换原生 Trace Processor 后端 | 不将原生 Trace Processor 变成其他解析器的必需依赖 |
 | 转换与采集 | 按需增加 Python / FastAPI 适配服务 | 厂商格式和采集端集成，不作为首版必需后台 |
 | 验证 | Vitest + Playwright | 时间语义、查询一致性、视图联动与性能回归 |
@@ -298,7 +298,7 @@ Perfetto Trace Processor 只是 Perfetto 源解析器的内部实现。WASM、RP
 
 完整 Perfetto UI 的 iframe 接口可以作为后续高级查看入口。本产品的统一播放时间、CU 状态和事件联动由自己的控制器管理。
 
-桌面版推荐 Electron，目的是统一 Chromium 行为和辅助进程管理。如果后续优先要求较小安装体积，再评估 Tauri 的系统 WebView 差异和兼容成本。
+桌面版确定使用 Tauri 2，共用现有前端。浏览器输入 / 下载与桌面系统文件对话框通过独立宿主接口适配。以后 VS Code 扩展注入自己的宿主文件接口，并另行实现 Webview 资源地址、消息和 CSP 适配；不会要求复制一套重放业务。当前桌面版保留 WASM 解析，原生大文件后端后续单独接入。
 
 ## 10. 模块与性能
 
@@ -452,5 +452,5 @@ project                     配置、来源、映射、对齐和保存
 - [PyTorch Profiler 与 Chrome Trace 导出](https://docs.pytorch.org/docs/stable/profiler.html)
 - [NVIDIA Nsight Systems 硬件指标](https://docs.nvidia.com/nsight-systems/UserGuide/index.html)
 - [AMD ROCprofiler thread trace](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-thread-trace.html)
-- [Electron 与 Chromium](https://www.electronjs.org/docs/latest/tutorial/security)
+- [Tauri 2 架构](https://v2.tauri.app/concept/architecture/)
 - [Tauri 各平台 WebView](https://v2.tauri.app/reference/webview-versions/)

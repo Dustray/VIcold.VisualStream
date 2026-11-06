@@ -1,4 +1,6 @@
 @import "tailwindcss";
+.app-header.desktop-header { padding-right: 0; gap: 14px; }
+.desktop-header .brand, .desktop-header .header-section { pointer-events: none; }
 .theme-select { display: flex; align-items: center; gap: 5px; color: var(--vs-text-secondary, #9eb1ce); }
 .theme-select select { width: 102px; font-size: 12px; padding: 5px 3px; border-color: transparent; background: transparent; color: inherit; }
 .theme-select option { color: var(--vs-text-primary, #c7d2e3); background: var(--vs-surface-panel, #10151e); }

@@ -5,6 +5,8 @@ import { WorkerTraceSource } from '../core/worker-source'
 import { clampTime, duration, fitRange, formatTime, timeBuckets } from '../core/time'
 import { parseProject, persistProject } from '../core/project'
 import { stepPlaybackSpeed } from '../core/playback-speed'
+import { projectFileLimit, projectFileLimitMessage } from '../core/files'
+import { workspaceHost } from '../host'
 import type { ActivityBin, Bookmark, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, SampleFile, TimelineRow, TimeRange } from '../core/types'
 import { IntervalIndex } from '../engine/interval-index'
 import { PlaybackClock } from '../engine/playback-clock'
@@ -396,18 +398,16 @@ export const useReplayStore = defineStore('replay', () => {
   }
   async function saveProject(): Promise<void> {
     if (!sources.value.length) return
-    const project = snapshot()
-    const url = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'visualstream.vstream.json'
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-    await persistProject(project).catch(() => {})
-    notify('项目已保存，原始 trace 通过指纹关联')
+    try {
+      const project = snapshot()
+      if (!await workspaceHost().saveProjectFile(JSON.stringify(project, null, 2), 'visualstream.vstream.json')) return
+      await persistProject(project).catch(() => {})
+      notify('项目已保存，原始 trace 通过指纹关联')
+    } catch (error) { notify(`保存项目失败：${error instanceof Error ? error.message : String(error)}`, 'error') }
   }
   async function openProject(file: File): Promise<void> {
     try {
+      if (file.size > projectFileLimit) throw new Error(projectFileLimitMessage)
       const project = parseProject(await file.text())
       pendingProject.value = project
       if (project.sources.every(expected => sources.value.some(model => model.source.metadata.fingerprint === expected.fingerprint))) { applyPendingProject(); return }

@@ -24,6 +24,7 @@ test('workbench chrome avoids browser selection, menus, dragging and page zoom w
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await ready(page)
+  await expect(page.getByRole('group', { name: '窗口控制' })).toHaveCount(0)
   const heading = page.locator('.sidebar-title')
   expect(await heading.evaluate(element => getComputedStyle(element).userSelect)).toBe('none')
   expect(await nativeActions(heading)).toEqual({ context: true, drag: true, middle: true, selection: true })

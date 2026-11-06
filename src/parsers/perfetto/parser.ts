@@ -3,6 +3,7 @@ import { queryDensity } from './density'
 import { PerfettoEngine } from './engine'
 import { queryGroupedStatistics } from './grouped-statistics'
 import { queryActivity } from './activity'
+import { traceFileLimit, traceFileLimitMessage } from '../../core/files'
 
 const integer = (value: SqlRow[string]): bigint => typeof value === 'bigint' ? value : BigInt(String(value ?? 0))
 const number = (value: SqlRow[string]): number => Number(value ?? 0)
@@ -15,7 +16,7 @@ export class PerfettoParser implements TraceFileParser {
     return header.length > 2 && header[0] === 10
   }
   async open(file: File, progress: (value: ImportProgress) => void): Promise<ParsedTraceSource> {
-    if (file.size > 256 * 1024 * 1024) throw new Error('首版每个文件上限为 256 MB；更大的记录需要后续原生解析后端。')
+    if (file.size > traceFileLimit) throw new Error(traceFileLimitMessage)
     progress({ stage: '启动本地 Perfetto 引擎', fraction: 0.03 })
     const engine = new PerfettoEngine()
     await engine.initialize()

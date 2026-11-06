@@ -1,8 +1,8 @@
 # VisualStream
 
-大模型推理记录的浏览器重放工作台。当前实现 **Megakernel + Perfetto Protobuf**，直接加载 `trace_demo` 中的真实文件；计算模式和文件解析器分别注册。
+大模型推理记录的重放工作台，同时提供 **浏览器版与 Tauri 2 桌面版**，共用 Vue 3 + TypeScript 前端。当前实现 **Megakernel + Perfetto Protobuf**，直接加载 `trace_demo` 中的真实文件；计算模式和文件解析器分别注册。
 
-## 本地启动
+## 浏览器版启动
 
 需要 Node.js 22.12+；本项目在 Windows、Node.js 26 和 Edge 上验证。
 
@@ -21,6 +21,33 @@ npm run dev
 `setup:assets` 首次需要联网下载官方 Perfetto Worker、32 位与 Memory64 WASM 及许可证，默认锁定 `v59.1-79997ada9`，生成文件哈希清单并复制三个样例。之后校验本地缓存，不需要再次下载。`public/vendor/perfetto` 与 `public/samples` 为生成目录，不提交源码。要主动更新引擎，运行 `npm run setup:assets -- --refresh`，更新后重新执行测试。
 
 运行时不上传 trace，也不请求第三方 CDN。部署时一起提供 `dist` 中的 Worker、WASM 和样例资源；使用 HTTP 或 HTTPS，不能直接双击 `index.html`。
+
+## 桌面版启动与打包
+
+Windows 开发环境需要 Node.js 22.12+、Rust 1.90+（MSVC 工具链）、Visual Studio 的 C++ 桌面开发工具与 Windows SDK，以及 Microsoft Edge WebView2 Runtime。使用现有 Rust 工具链即可，不要求切换全局默认版本。其他系统需另外安装 Tauri 对应的系统依赖；本轮交付和验收目标是 Windows x64。
+
+双击根目录的 `run-desktop.cmd`，或执行：
+
+```sh
+npm install
+npm run desktop
+```
+
+启动时自动准备 Perfetto / 样例资源并启动前端开发服务，随后打开桌面窗口。首次 Rust 编译会下载依赖，耗时明显长于后续启动。桌面开发服务使用 5174 端口，浏览器入口仍使用 5173，可以同时启动 `run.cmd` 和 `run-desktop.cmd`；桌面开发服务的地址也能在浏览器访问。
+
+构建 Windows 安装包：
+
+```sh
+npm run desktop:build
+```
+
+输出的独立程序在 `src-tauri/target/release/visualstream.exe`，安装程序在 `src-tauri/target/release/bundle/nsis/`。发行程序内嵌前端、解析 Worker、WASM 和真实样例，不需要启动 Vite 或本地 HTTP 服务，也不需要安装 Node.js / Rust。安装程序在缺少 WebView2 时按 Tauri 默认方式引导安装，首次补装运行时需要联网；已有运行时后，重放功能离线运行。当前为未签名的本地构建，尚未接入自动更新。
+
+桌面版的「导入 trace」「打开项目」「保存项目」使用系统文件对话框；支持多选 trace 与中文路径，取消操作不修改会话。拖入文件继续复用网页导入流程。桌面权限仅授予主窗口的窗口控制、文件对话框、读取、文件信息与项目写入，实际路径由文件对话框授权，不配置任意目录访问权限。两端项目格式相同，可互相打开；自定义 trace 仍按指纹关联，需要重新选择源文件。
+
+桌面窗口隐藏系统标题栏，在工作台右上角提供最小化、最大化 / 还原、关闭按钮。拖动顶部品牌或空白区域可以移动窗口，双击可最大化 / 还原；主题切换、项目操作和窗口按钮保持独立点击。浏览器版不显示窗口按钮。
+
+`npm run build` 仍只输出浏览器网站，`npm run desktop:build` 输出桌面安装包，两个入口互不替代。桌面版当前继续使用同一套 Perfetto WASM 解析与 256 MB 单文件限制；原生 Trace Processor 和大文件后端后续独立接入。
 
 ## 已实现
 
@@ -98,6 +125,10 @@ File
 | `src/engine/` | 播放时钟、活动区间索引 |
 | `src/stores/replay.ts` | 查询缓存、来源、项目与界面联动 |
 | `src/components/` | 时间轴、CU 视图与分析面板 |
+| `src/host/` | 浏览器 / 桌面宿主适配、文件打开与项目保存接口 |
+| `src-tauri/` | Tauri 窗口、系统插件、权限与安装包配置 |
+
+`WorkspaceHost` 将宿主文件能力与重放功能隔开；浏览器默认使用文件输入框和下载，桌面启动时才动态加载 Tauri 适配器。后续 VS Code 扩展可以在创建 Vue 应用前通过 `setWorkspaceHost` 注入自己的文件消息桥；当前未实现 VS Code 扩展、Webview 资源 URL / CSP 适配或扩展打包。源文件解析器、计算模式和播放引擎继续共用，不依赖 Tauri API。
 
 使用 Vue 3.5、Pinia 4、Vite 8、Tailwind 4、Reka UI 与 TypeScript 7.0.2。通用 TS 代码由官方原生 TS7 检查；Vue 单文件组件使用 `vue-tsc` 加 `typescript-native-bridge`，其底层同样调用 TS7。桥接包通过 npm 别名占据 `typescript`，官方编译器安装在 `typescript-native`。桥接层有独立版本号，不是把编译器降到 TypeScript 6。`.npmrc` 的 `legacy-peer-deps` 用于桥接预发布版本与 `vue-tsc` peer 范围的兼容；完整依赖由 lockfile 固定。
 
@@ -109,9 +140,12 @@ npm run typecheck
 npm run test:e2e
 npm run build
 npm run preview
+npm run desktop:check
 ```
 
 浏览器测试优先使用 Windows 已安装的 Edge；其他环境先执行 `npx playwright install chromium`。测试覆盖真实 TP1/TP2 的解析与播放交互、搜索选区、统计、项目恢复、来源隔离、去重和无效文件。设置 `PLAYWRIGHT_BASE_URL` 可以对生产预览地址运行相同测试。
+
+Windows 桌面构建完成后执行 `npm run test:desktop`，直接启动发行程序，通过 WebView2 调试接口和系统对话框自动化验证内嵌资源、真实 trace 解析、播放、取消、中文路径导入、项目保存与恢复。只在该测试进程启用本机调试端口，结束后关闭测试窗口；截图和临时项目写入忽略目录 `.local/desktop-check/`。
 
 真实样例的验收数量：TP1 为 76 CU、128,200 个区间；TP2 两来源各 76 CU、222,664 个区间，总计 152 CU、445,328 个区间。
 

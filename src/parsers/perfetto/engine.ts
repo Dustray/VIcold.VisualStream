@@ -5,6 +5,7 @@ interface PendingRequest { method: number; query: QueryRows; resolve: (rows: Sql
 
 export class PerfettoEngine {
   private worker!: Worker
+  private workerUrl: string | null = null
   private port!: MessagePort
   private sequence = 0
   private readonly frames = new RpcFrames()
@@ -12,7 +13,10 @@ export class PerfettoEngine {
   private queue: Promise<unknown> = Promise.resolve()
 
   async initialize(): Promise<void> {
-    this.worker = new Worker('/vendor/perfetto/engine_bundle.js')
+    const bundle = await fetch('/vendor/perfetto/engine_bundle.js')
+    if (!bundle.ok) throw new Error('Perfetto 运行文件缺失，请先执行 npm run setup:assets。')
+    this.workerUrl = URL.createObjectURL(new Blob([await bundle.text()], { type: 'text/javascript' }))
+    this.worker = new Worker(this.workerUrl)
     this.worker.onerror = event => this.fail(new Error(event.message || 'Perfetto 原生引擎异常'))
     const channel = new MessageChannel()
     this.port = channel.port2
@@ -27,7 +31,7 @@ export class PerfettoEngine {
   append(bytes: Uint8Array): Promise<void> { return this.enqueue(async () => { await this.request(1, { appendTraceData: bytes }) }) }
   finish(): Promise<void> { return this.enqueue(async () => { await this.request(2, {}) }) }
   query(sql: string): Promise<SqlRow[]> { return this.enqueue(() => this.request(3, { queryArgs: { sqlQuery: sql } })) }
-  close(): void { this.worker?.terminate(); this.port?.close(); this.fail(new Error('Perfetto 引擎已关闭')) }
+  close(): void { this.worker?.terminate(); if (this.workerUrl) { URL.revokeObjectURL(this.workerUrl); this.workerUrl = null }; this.port?.close(); this.fail(new Error('Perfetto 引擎已关闭')) }
 
   private enqueue<Result>(operation: () => Promise<Result>): Promise<Result> {
     const result = this.queue.then(operation)

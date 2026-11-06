@@ -1,6 +1,8 @@
 # Dependencies and generated assets
 node_modules/
 dist/
+src-tauri/target/
+src-tauri/gen/schemas/
 public/vendor/perfetto/
 public/samples/
 
