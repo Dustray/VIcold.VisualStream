@@ -53,19 +53,19 @@ npm run desktop:build
 
 ## GitHub Actions 自动构建
 
-[构建工作流](.github/workflows/build.yml) 仅在推送 `v` 开头的标签时运行，例如 `v0.1.0`。
+[构建工作流](.github/workflows/build.yml) 在发布 `v` 开头标签对应的 **Release（正式版本）或 Pre-release（预发布版本）** 时执行打包。工作流监听 `release.published` 并检查标签前缀，支持从草稿发布这两种版本。单独推送标签、保存草稿或编辑已发布版本不会执行打包。
 
-首次启用时，先将工作流提交并推送，再创建指向该提交的新标签。标签所指向的提交必须包含 `.github/workflows/build.yml`，仅在本地新增工作流文件无法触发构建。例如：
+首次启用或修改触发条件后，先将工作流提交并推送，再创建指向该提交的新标签。标签所指向的提交必须包含更新后的 `.github/workflows/build.yml`。例如：
 
 ```sh
 git add .github/workflows/build.yml README.md
-git commit -m "Add tag-triggered GitHub Actions builds"
+git commit -m "Build published releases with GitHub Actions"
 git push origin master
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
-示例标签 `v0.1.1` 应替换为尚未使用的版本号。已有标签仍指向原来的提交，不会随分支更新而自动移动；再次推送未改变的标签不会触发新构建。
+示例标签 `v0.1.2` 应替换为尚未使用的版本号。随后在仓库的 **Releases → Draft a new release** 中选择该标签，按需勾选 **Set as a pre-release**，发布正式版本或预发布版本均可触发构建。标签也可以在创建 Release 时从最新提交创建。已有标签仍指向原来的提交，不会随分支更新而自动移动。
 
 工作流使用 Windows x64 环境、Node.js 24 与 Rust stable，按锁文件安装依赖并运行单元测试，然后通过现有 Tauri 构建入口准备 Perfetto 资源、执行类型检查、打包网页与 Release 客户端。npm、Rust 和 Perfetto 资源均有缓存。
 
