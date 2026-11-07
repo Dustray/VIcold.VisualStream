@@ -10,6 +10,62 @@ async function frames(page: Page, count = 3): Promise<void> {
   }, count)
 }
 
+test('continuous zoom and dragging repaint each frame and stop repainting when idle', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.addInitScript(() => {
+    const counts = { frames: 0 }
+    ;(window as unknown as { timelinePaints: typeof counts }).timelinePaints = counts
+    const original = CanvasRenderingContext2D.prototype.clearRect
+    CanvasRenderingContext2D.prototype.clearRect = function(...args) {
+      if (this.canvas.classList.contains('timeline-background')) counts.frames++
+      original.apply(this, args)
+    }
+  })
+  await openWorkspace(page)
+  await expect(page.locator('.summary-grid strong').first()).not.toHaveText('0')
+  await expect(page.locator('.timeline-overview')).toHaveAttribute('aria-busy', 'false')
+  const overlay = page.locator('.timeline-overlay')
+  await page.getByRole('button', { name: '放大时间轴', exact: true }).click()
+  await expect(overlay).toHaveAttribute('aria-busy', 'false')
+  const bounds = (await overlay.boundingBox())!
+  const position = { x: bounds.x + bounds.width * 0.65, y: bounds.y + bounds.height * 0.4 }
+  await page.mouse.move(position.x, position.y)
+  await page.keyboard.down('w')
+  const zoomPaints = await page.evaluate(async () => {
+    const counts = (window as unknown as { timelinePaints: { frames: number } }).timelinePaints
+    const initial = counts.frames
+    for (let index = 0; index < 60; index++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    return counts.frames - initial
+  })
+  await page.keyboard.up('w')
+  expect(zoomPaints).toBeGreaterThanOrEqual(48)
+  await expect(overlay).toHaveAttribute('aria-busy', 'false')
+  await page.mouse.down({ button: 'right' })
+  const dragPaints = await overlay.evaluate(async (canvas, position) => {
+    const counts = (window as unknown as { timelinePaints: { frames: number } }).timelinePaints
+    const initial = counts.frames
+    for (let index = 0; index < 60; index++) {
+      canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 2, clientX: position.x + Math.sin(index / 10) * 50, clientY: position.y, bubbles: true }))
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    }
+    return counts.frames - initial
+  }, position)
+  await page.mouse.up({ button: 'right' })
+  expect(dragPaints).toBeGreaterThanOrEqual(48)
+  await expect(overlay).toHaveAttribute('aria-busy', 'false')
+  await expect(page.locator('.timeline-query-loading')).toHaveCount(0)
+  await frames(page, 10)
+  const idlePaints = await page.evaluate(async () => {
+    const counts = (window as unknown as { timelinePaints: { frames: number } }).timelinePaints
+    const initial = counts.frames
+    for (let index = 0; index < 30; index++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    return counts.frames - initial
+  })
+  expect(idlePaints).toBe(0)
+  expect(errors).toEqual([])
+})
+
 test('CU selection repaints only changed cells and playback reuses the overview chart', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))

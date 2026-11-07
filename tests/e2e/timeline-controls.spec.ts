@@ -38,7 +38,7 @@ test('A and D animate the viewport, accumulate short taps, and yield to direct n
     await expect(page.locator('.timeline-overlay')).toHaveAttribute('aria-busy', 'false')
   }
   const initial = await project(page)
-  const distance = width(initial) / 5n
+  const distance = width(initial) / 10n
   const start = await page.evaluate(() => {
     const positions = (window as unknown as { panPositions: number[] }).panPositions
     const last = positions.at(-1)!
@@ -109,7 +109,9 @@ test('holding WASD keeps moving without repeated keydown events and preserves th
       expect(Number(anchor(after) - anchor(previous))).toBeGreaterThanOrEqual(-8)
     } else {
       const distance = BigInt(after.viewport.start) - BigInt(previous.viewport.start)
-      expect(key === 'a' ? -distance : distance).toBeGreaterThan(width(previous) / 2n)
+      const travel = key === 'a' ? -distance : distance
+      expect(travel).toBeGreaterThan(width(previous) * 3n / 10n)
+      expect(travel).toBeLessThan(width(previous) * 65n / 100n)
       expect(width(after)).toBe(width(previous))
     }
     expect(after.time).toBe(initial.time)
@@ -352,7 +354,7 @@ test('WASD, slow speeds and global Space work with control focus while text inpu
   expect(width(zoomed)).toBe(BigInt(Math.round(Number(width(original)) * 0.8)))
   await page.keyboard.press('a')
   const earlier = await project(page)
-  expect(BigInt(earlier.viewport.start)).toBe(BigInt(zoomed.viewport.start) - width(zoomed) / 5n)
+  expect(BigInt(earlier.viewport.start)).toBe(BigInt(zoomed.viewport.start) - width(zoomed) / 10n)
   expect(width(earlier)).toBe(width(zoomed))
   await page.keyboard.press('d')
   const later = await project(page)

@@ -17,6 +17,8 @@ export class ScrollMotion {
     private readonly scheduler: FrameScheduler = { now: () => performance.now(), request: callback => requestAnimationFrame(callback), cancel: frame => cancelAnimationFrame(frame) },
   ) {}
 
+  get active(): boolean { return this.target !== null }
+
   move(delta: number): void {
     if (!Number.isFinite(delta) || !delta) return
     this.target = Math.max(0, Math.min(Math.max(0, this.maximum()), (this.target ?? this.read()) + delta))

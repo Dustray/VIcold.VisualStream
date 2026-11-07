@@ -8,6 +8,7 @@ import { useReplayStore } from '../stores/replay'
 import { TimelineCache, type TimelineRequest, type TimelineTrackData } from '../engine/timeline-cache'
 import { ScrollMotion } from '../engine/scroll-motion'
 import { fitTimelineLabel } from '../engine/timeline-label'
+import { TimelineGeometryCache, type TimelineSpan } from '../engine/timeline-geometry'
 
 const store = useReplayStore()
 const viewportElement = ref<HTMLDivElement | null>(null)
@@ -41,6 +42,11 @@ let width = 900
 let height = 280
 let observer: ResizeObserver | null = null
 let drawFrame = 0
+let backgroundDirty = true
+let paintedViewport: TimeRange | null = null
+let paintedScrollTop = -1
+let dataViewport: TimeRange | null = null
+let dataScrollTop = -1
 let overlayFrame = 0
 let overviewBase: HTMLCanvasElement | null = null
 let overviewKey: unknown[] = []
@@ -57,10 +63,9 @@ const verticalMotion = new ScrollMotion(
 )
 const labelWidths = new Map<string, number>()
 function stopMotion(): void { store.stopPan(); verticalMotion.cancel() }
-function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number, right: number, top: number): void {
+function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number, right: number, top: number, ink: string): void {
   if (right - left < 17) return
-  canvas.font = '11px "Segoe UI", sans-serif'
-  const label = fitTimelineLabel(name.replace('TASK_', ''), right - left - 8, text => {
+  const label = fitTimelineLabel(name, right - left - 8, text => {
     let width = labelWidths.get(text)
     if (width === undefined) {
       width = canvas.measureText(text).width
@@ -70,10 +75,10 @@ function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number,
     return width
   })
   if (!label) return
-  canvas.save(); canvas.beginPath(); canvas.rect(left + 3, top + 5, right - left - 6, rowHeight - 10); canvas.clip()
-  canvas.fillStyle = themeColor('operator-ink', '#111824'); canvas.fillText(label, left + 4, top + 14); canvas.restore()
+  canvas.fillStyle = ink; canvas.fillText(label, left + 4, top + 14)
 }
 const cache = new TimelineCache()
+const geometryCache = new TimelineGeometryCache(name => `${eventColor(name)}${operatorOpacity()}`)
 const overviewTracks = computed(() => {
   const tracks = new Map<string, ReplayDensity[]>()
   for (const bin of store.overview) {
@@ -105,7 +110,7 @@ function position(event: PointerEvent | WheelEvent): { x: number; y: number } { 
 function rememberPointer(horizontal: number): void { store.setZoomPointer(horizontal < gutter || horizontal > width - 13 ? null : (horizontal - gutter) / plotWidth()) }
 function pointerLeave(): void { tooltip.value = null; store.setZoomPointer(null) }
 function visibleRows(padding = 0): TimelineRow[] { const first = Math.max(0, Math.floor(scrollTop.value / rowHeight) - 1 - padding); return store.rows.slice(first, Math.min(store.rows.length, Math.ceil((scrollTop.value + height - ruler) / rowHeight) + 2 + padding)) }
-function scheduleBackground(): void { if (!drawFrame) drawFrame = requestAnimationFrame(draw); scheduleOverlay() }
+function scheduleBackground(): void { backgroundDirty = true; if (!drawFrame) drawFrame = requestAnimationFrame(draw); scheduleOverlay() }
 function scheduleOverlay(): void { if (!overlayFrame) overlayFrame = requestAnimationFrame(drawOverlay) }
 function invalidate(): void {
   updateData()
@@ -135,6 +140,8 @@ function updateData(): void {
     }
   }
   data = next
+  dataViewport = store.viewport
+  dataScrollTop = scrollTop.value
   dense.value = anyDensity
   querying.value = missing && !store.loading
 }
@@ -170,6 +177,14 @@ async function query(): Promise<void> {
 function draw(): void {
   drawFrame = 0
   if (!background.value || !viewportElement.value) return
+  const viewport = store.viewport
+  const scrollPosition = scrollTop.value
+  if (store.zooming || store.panningViewport || panning.value || verticalMotion.active || overviewGesture) drawFrame = requestAnimationFrame(draw)
+  if (!backgroundDirty && paintedViewport === viewport && paintedScrollTop === scrollPosition) return
+  if (dataViewport !== viewport || dataScrollTop !== scrollPosition) updateData()
+  backgroundDirty = false
+  paintedViewport = viewport
+  paintedScrollTop = scrollPosition
   width = viewportElement.value.clientWidth
   height = viewportElement.value.clientHeight
   const canvas = context(background.value, width, height)
@@ -199,12 +214,19 @@ function draw(): void {
   canvas.fillStyle = themeColor('canvas-muted', '#77869e'); canvas.fillText('资源 / 原始轨道', 15, 15)
   hits = []
   const visible = visibleRows()
-  for (const row of visible) {
-    const index = store.rows.indexOf(row)
-    const top = ruler + index * rowHeight - scrollTop.value
+  geometryCache.retain(visible.map(row => row.id))
+  const firstRow = Math.max(0, Math.floor(scrollTop.value / rowHeight) - 1)
+  const scale = plotWidth() / Number(duration(viewport))
+  const selectedCu = store.selectedCuId
+  const selectedEvent = store.selectedEvent
+  const selectedOpacity = operatorOpacity(true)
+  const ink = themeColor('operator-ink', '#111824')
+  const highlight = themeColor('accent', '#eff5ff')
+  for (const [offset, row] of visible.entries()) {
+    const top = ruler + (firstRow + offset) * rowHeight - scrollTop.value
     if (top < ruler - rowHeight || top > height) continue
     canvas.save(); canvas.beginPath(); canvas.rect(0, ruler, width, height - ruler); canvas.clip()
-    const selected = row.cuId === store.selectedCuId
+    const selected = row.cuId === selectedCu
     if (row.kind === 'device') { canvas.fillStyle = themeColor('surface-raised', '#19212e'); canvas.fillRect(0, top, width, rowHeight) }
     else if (selected) { canvas.fillStyle = themeColor('selection-fill', '#8cafff0d'); canvas.fillRect(0, top, width, rowHeight) }
     canvas.strokeStyle = themeColor('canvas-grid', '#202735'); canvas.beginPath(); canvas.moveTo(0, top + rowHeight - 0.5); canvas.lineTo(width, top + rowHeight - 0.5); canvas.stroke()
@@ -218,38 +240,47 @@ function draw(): void {
     if (row.kind !== 'device') {
       canvas.save(); canvas.beginPath(); canvas.rect(gutter, top + 2, plotWidth(), rowHeight - 4); canvas.clip()
       const tracks = row.trackIds.map(trackId => data.get(`${row.sourceId}:${trackId}`)).filter((track): track is TimelineTrackData => track !== undefined)
-      const bins = tracks.flatMap(track => track.bins).filter(bin => bin.start < store.viewport.end && bin.end > store.viewport.start)
-      const merged = new Map<number, ReplayDensity>()
-      for (const bin of bins) {
-        const bucket = Math.floor((toX(bin.start) - gutter) / 3)
+      const geometry = geometryCache.read(row.id, tracks, viewport.start)
+      const start = Number(viewport.start - geometry.origin)
+      const end = Number(viewport.end - geometry.origin)
+      const merged = new Map<number, TimelineSpan<ReplayDensity>>()
+      for (const span of geometry.bins) {
+        if (span.start >= end || span.end <= start) continue
+        const bin = span.item
+        const bucket = Math.floor((span.start - start) * scale / 3)
         const existing = merged.get(bucket)
         if (existing) {
-          existing.count += bin.count
-          if ((bin.representativeDuration ?? 0n) > (existing.representativeDuration ?? 0n)) { existing.name = bin.name; existing.representativeDuration = bin.representativeDuration }
-          if (bin.end > existing.end) existing.end = bin.end
+          existing.item.count += bin.count
+          if ((bin.representativeDuration ?? 0n) > (existing.item.representativeDuration ?? 0n)) {
+            existing.item.name = bin.name
+            existing.item.representativeDuration = bin.representativeDuration
+            existing.paint = span.paint
+            existing.label = span.label
+          }
+          if (bin.end > existing.item.end) { existing.item.end = bin.end; existing.end = span.end }
         }
-        else merged.set(bucket, { ...bin })
+        else merged.set(bucket, { ...span, item: { ...bin } })
       }
-      for (const bin of merged.values()) {
-        const left = Math.max(gutter, toX(bin.start))
-        const right = Math.min(width - 13, toX(bin.end))
+      for (const span of merged.values()) {
+        const left = Math.max(gutter, gutter + (span.start - start) * scale)
+        const right = Math.min(width - 13, gutter + (span.end - start) * scale)
         if (right < gutter || left > width) continue
-        canvas.fillStyle = `${eventColor(bin.name ?? '')}${operatorOpacity(selected)}`
+        canvas.fillStyle = selected ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
         canvas.fillRect(left, top + 5, Math.max(2, right - left - 0.5), rowHeight - 10)
-        if (bin.name) drawLabel(canvas, bin.name, left, right, top)
-        hits.push({ bin, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
+        if (span.label) drawLabel(canvas, span.label, left, right, top, ink)
+        hits.push({ bin: span.item, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
       }
-      const events = tracks.flatMap(track => track.events).filter(event => event.start < store.viewport.end && event.end > store.viewport.start).sort((left, right) => Number((right.end - right.start) - (left.end - left.start)))
-      for (const event of events) {
-        const left = Math.max(gutter, toX(event.start))
-        const right = Math.min(width - 13, toX(event.end))
+      for (const span of geometry.events) {
+        if (span.start >= end || span.end <= start) continue
+        const event = span.item
+        const left = Math.max(gutter, gutter + (span.start - start) * scale)
+        const right = Math.min(width - 13, gutter + (span.end - start) * scale)
         if (right < gutter || left > width) continue
-        const chosen = event.id === store.selectedEvent?.id && event.sourceId === store.selectedEvent.sourceId
-        const color = eventColor(event.name)
-        canvas.fillStyle = `${color}${operatorOpacity(chosen)}`
+        const chosen = event.id === selectedEvent?.id && event.sourceId === selectedEvent.sourceId
+        canvas.fillStyle = chosen ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
         canvas.beginPath(); canvas.roundRect(left, top + 5, Math.max(1, right - left - 1), rowHeight - 10, 2); canvas.fill()
-        if (chosen) { canvas.strokeStyle = themeColor('accent', '#eff5ff'); canvas.stroke() }
-        drawLabel(canvas, event.name, left, right, top)
+        if (chosen) { canvas.strokeStyle = highlight; canvas.stroke() }
+        drawLabel(canvas, span.label, left, right, top, ink)
         hits.push({ event, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
       }
       canvas.restore()
@@ -258,6 +289,8 @@ function draw(): void {
   }
   canvas.strokeStyle = themeColor('border-strong', '#303b50'); canvas.beginPath(); canvas.moveTo(gutter - 0.5, 0); canvas.lineTo(gutter - 0.5, height); canvas.stroke()
   canvas.strokeStyle = themeColor('border', '#2a3446'); canvas.beginPath(); canvas.moveTo(0, ruler - 0.5); canvas.lineTo(width, ruler - 0.5); canvas.stroke()
+  if (overlayFrame) cancelAnimationFrame(overlayFrame)
+  drawOverlay()
 }
 
 function drawOverlay(): void {
@@ -439,7 +472,7 @@ function overviewMove(event: PointerEvent): void {
 function overviewUp(event: PointerEvent): void { overviewGesture = null; if (overviewCanvas.value?.hasPointerCapture(event.pointerId)) overviewCanvas.value.releasePointerCapture(event.pointerId) }
 
 watch(() => [store.viewport, store.rows, store.loading], invalidate)
-watch(() => store.displayedSources, () => { stopMotion(); queryVersion++; cache.clear(); invalidate() })
+watch(() => store.displayedSources, () => { stopMotion(); queryVersion++; cache.clear(); geometryCache.clear(); invalidate() })
 watch(() => [store.currentTime, store.selection, store.bookmarks], scheduleOverlay, { deep: false })
 watch(() => [store.selectedEvent, store.selectedCuId], scheduleBackground)
 watch(() => store.timelineFocus, target => {
@@ -450,7 +483,7 @@ watch(() => store.timelineFocus, target => {
   scroller.value.scrollTop = index * rowHeight
   scroll()
 }, { flush: 'post' })
-watch(resolvedTheme, () => { labelWidths.clear(); scheduleBackground() })
+watch(resolvedTheme, () => { labelWidths.clear(); geometryCache.clear(); scheduleBackground() })
 watch(() => [store.overview, store.overviewMetric, store.overviewActivity], () => { overviewHover.value = null; updateData(); scheduleBackground() })
 watch(() => store.selectedCuId, id => {
   if (!id || !scroller.value) return
@@ -464,7 +497,7 @@ onMounted(() => {
   if (viewportElement.value) observer.observe(viewportElement.value)
   invalidate()
 })
-onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; cache.clear(); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
+onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; cache.clear(); geometryCache.clear(); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
 </script>
 
 <template>
