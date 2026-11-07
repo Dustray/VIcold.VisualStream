@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ChevronDown, ChevronRight, Cpu, FileChartColumn, FolderOpen, History, X } from 'lucide-vue-next'
+import { toRef } from 'vue'
+import { ChevronDown, ChevronRight, Cpu, FileChartColumn, FolderOpen, History, Layers3, X } from 'lucide-vue-next'
 import { formatBytes } from '../core/time'
 import { useReplayStore } from '../stores/replay'
 
 const store = useReplayStore()
-const sessionExpanded = ref(true)
-const historyExpanded = ref(true)
+const sessionExpanded = toRef(store.ui, 'sessionExpanded')
+const historyExpanded = toRef(store.ui, 'historyExpanded')
 const inSession = (fingerprint: string) => store.sources.some(source => source.source.metadata.fingerprint === fingerprint)
 </script>
 
@@ -24,7 +24,8 @@ const inSession = (fingerprint: string) => store.sources.some(source => source.s
             <FileChartColumn :size="15" /><span><strong>{{ source.source.metadata.filename }}</strong><small>{{ formatBytes(source.source.metadata.bytes) }}<span>·</span>Perfetto</small></span>
           </button>
           <button class="file-remove" :aria-label="`移除 ${source.source.metadata.filename}`" :disabled="store.loading" @click.stop="store.removeSource(source.source.metadata.id)"><X :size="12" /></button>
-          <div class="file-resource"><span class="tree-line" /><Cpu :size="12" /><span>{{ source.device.label }}</span><span v-if="source.device.rank !== null" class="file-rank">Rank {{ source.device.rank }}</span><span>{{ source.device.cus.length }} CU</span></div>
+          <div v-if="source.device" class="file-resource"><span class="tree-line" /><Cpu :size="12" /><span>{{ source.device.label }}</span><span v-if="source.device.rank !== null" class="file-rank">Rank {{ source.device.rank }}</span><span>{{ source.device.cus.length }} CU</span></div>
+          <div v-else class="file-resource"><span class="tree-line" /><Layers3 :size="12" /><span>原始轨道</span><span>{{ source.source.metadata.trackCount }} 条</span></div>
         </div>
         <div v-if="!store.sources.length" class="sidebar-empty"><FolderOpen :size="24" /><p>将 trace 拖放到此处</p><span>或使用上方导入按钮</span></div>
       </div>

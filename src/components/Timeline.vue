@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Crosshair, Expand, Focus, LoaderCircle, Minus, Plus } from 'lucide-vue-next'
+import { ChevronsDownUp, ChevronsUpDown, Crosshair, Expand, Focus, LoaderCircle, Minus, Plus } from 'lucide-vue-next'
 import { duration, formatTime } from '../core/time'
 import { operatorColor as eventColor, operatorOpacity, resolvedTheme, themeColor } from '../core/theme'
 import type { ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
@@ -19,7 +19,7 @@ const scroller = ref<HTMLDivElement | null>(null)
 const querying = ref(false)
 const dense = ref(true)
 const panning = ref(false)
-const scrollTop = ref(0)
+const scrollTop = ref(store.ui.timelineScrollTop)
 const tooltip = ref<{ left: number; top: number; label: string; description: string } | null>(null)
 const overviewHover = ref<{ left: number; index: number } | null>(null)
 const overviewBusy = computed(() => store.overviewActivity.reduce((total, bin) => total + bin.busyDuration, 0n))
@@ -78,7 +78,7 @@ function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number,
   canvas.fillStyle = ink; canvas.fillText(label, left + 4, top + 14)
 }
 const cache = new TimelineCache()
-const geometryCache = new TimelineGeometryCache(name => `${eventColor(name)}${operatorOpacity()}`)
+const geometryCache = new TimelineGeometryCache(name => `${eventColor(name)}${operatorOpacity()}`, name => store.supportsCu ? name.replace('TASK_', '') : name)
 const overviewTracks = computed(() => {
   const tracks = new Map<string, ReplayDensity[]>()
   for (const bin of store.overview) {
@@ -120,7 +120,7 @@ function invalidate(): void {
 }
 
 function requests(timePadding = 0n, rowPadding = 0): TimelineRequest[] {
-  const visible = visibleRows(rowPadding).filter(row => row.kind !== 'device')
+  const visible = visibleRows(rowPadding).filter(row => row.trackIds.length)
   const range = { start: store.viewport.start - timePadding > store.bounds.start ? store.viewport.start - timePadding : store.bounds.start, end: store.viewport.end + timePadding < store.bounds.end ? store.viewport.end + timePadding : store.bounds.end }
   const resolution = Number(duration(store.viewport)) / plotWidth()
   return store.displayedSources.map(source => ({ source, range, resolution, density: resolution > 18000, trackIds: [...new Set(visible.filter(row => row.sourceId === source.source.metadata.id).flatMap(row => row.trackIds))] })).filter(request => request.trackIds.length)
@@ -211,7 +211,7 @@ function draw(): void {
     canvas.strokeStyle = themeColor('border-strong', '#354055'); canvas.beginPath(); canvas.moveTo(horizontal, ruler - 5); canvas.lineTo(horizontal, ruler); canvas.stroke()
   }
   canvas.restore()
-  canvas.fillStyle = themeColor('canvas-muted', '#77869e'); canvas.fillText('资源 / 原始轨道', 15, 15)
+  if (store.supportsCu) { canvas.fillStyle = themeColor('canvas-muted', '#77869e'); canvas.fillText('资源 / 原始轨道', 15, 15) }
   hits = []
   const visible = visibleRows()
   geometryCache.retain(visible.map(row => row.id))
@@ -226,18 +226,22 @@ function draw(): void {
     const top = ruler + (firstRow + offset) * rowHeight - scrollTop.value
     if (top < ruler - rowHeight || top > height) continue
     canvas.save(); canvas.beginPath(); canvas.rect(0, ruler, width, height - ruler); canvas.clip()
-    const selected = row.cuId === selectedCu
-    if (row.kind === 'device') { canvas.fillStyle = themeColor('surface-raised', '#19212e'); canvas.fillRect(0, top, width, rowHeight) }
+    const selected = row.cuId ? row.cuId === selectedCu : !!selectedEvent && selectedEvent.sourceId === row.sourceId && row.trackIds.includes(selectedEvent.trackId)
+    const isHeader = row.kind === 'device' || row.kind === 'source'
+    if (isHeader) { canvas.fillStyle = themeColor('surface-raised', '#19212e'); canvas.fillRect(0, top, width, rowHeight) }
     else if (selected) { canvas.fillStyle = themeColor('selection-fill', '#8cafff0d'); canvas.fillRect(0, top, width, rowHeight) }
     canvas.strokeStyle = themeColor('canvas-grid', '#202735'); canvas.beginPath(); canvas.moveTo(0, top + rowHeight - 0.5); canvas.lineTo(width, top + rowHeight - 0.5); canvas.stroke()
-    canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : row.kind === 'device' ? themeColor('canvas-label', '#b5c1d3') : themeColor('canvas-label', '#9caac0')
-    canvas.font = `${row.kind === 'device' ? '600 ' : ''}11px "Segoe UI", sans-serif`
+    canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : isHeader ? themeColor('canvas-label', '#b5c1d3') : themeColor('canvas-label', '#9caac0')
+    canvas.font = `${isHeader ? '600 ' : ''}11px "Segoe UI", sans-serif`
     canvas.save(); canvas.beginPath(); canvas.rect(0, top, gutter - 4, rowHeight); canvas.clip()
     if (row.kind === 'group') { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(store.expandedGroups.has(row.id) ? '▾' : '▸', 12, top + 14); canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : themeColor('canvas-label', '#a1afc3') }
-    canvas.fillText(row.label, row.kind === 'track' ? 29 : row.kind === 'device' ? 13 : 26, top + 14)
+    const labelLeft = row.treeDepth !== undefined ? 26 + Math.min(row.treeDepth, 6) * 12 : row.kind === 'track' ? 29 : isHeader ? 13 : 26
+    if (row.hasChildren) { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(row.collapsed ? '▸' : '▾', labelLeft - 14, top + 14); canvas.fillStyle = themeColor('canvas-label', '#a1afc3') }
+    const label = row.treeDepth !== undefined || row.kind === 'source' ? fitTimelineLabel(row.label, Math.max(10, gutter - 57 - labelLeft), text => canvas.measureText(text).width) : row.label
+    canvas.fillText(label, labelLeft, top + 14)
     canvas.fillStyle = themeColor('canvas-muted', '#596b86'); canvas.font = '11px "Segoe UI", sans-serif'; canvas.textAlign = 'right'; canvas.fillText(row.subtitle, gutter - 13, top + 14); canvas.textAlign = 'left'
     canvas.restore()
-    if (row.kind !== 'device') {
+    if (row.trackIds.length) {
       canvas.save(); canvas.beginPath(); canvas.rect(gutter, top + 2, plotWidth(), rowHeight - 4); canvas.clip()
       const tracks = row.trackIds.map(trackId => data.get(`${row.sourceId}:${trackId}`)).filter((track): track is TimelineTrackData => track !== undefined)
       const geometry = geometryCache.read(row.id, tracks, viewport.start)
@@ -373,6 +377,7 @@ function pointerDown(event: PointerEvent): void {
   if (point.x < gutter && !pan) {
     const row = store.rows[Math.floor((point.y - ruler + scrollTop.value) / rowHeight)]
     if (row?.kind === 'group') { store.toggleGroup(row.id); if (row.cuId) store.selectCu(row.cuId, true) }
+    else if (row?.hasChildren) store.toggleTrack(row.id)
     return
   }
   const hit = [...hits].reverse().find(hit => point.x >= hit.left && point.x <= hit.right && point.y >= hit.top && point.y <= hit.bottom)
@@ -438,7 +443,7 @@ function wheel(event: WheelEvent): void {
     if (!event.shiftKey) verticalMotion.move(event.deltaY * unit)
   }
 }
-function scroll(): void { scrollTop.value = scroller.value?.scrollTop ?? 0; invalidate() }
+function scroll(): void { scrollTop.value = scroller.value?.scrollTop ?? 0; store.ui.timelineScrollTop = scrollTop.value; invalidate() }
 function overviewDown(event: PointerEvent): void {
   if (!store.displayedSources.length) return
   stopMotion()
@@ -477,12 +482,15 @@ watch(() => [store.currentTime, store.selection, store.bookmarks], scheduleOverl
 watch(() => [store.selectedEvent, store.selectedCuId], scheduleBackground)
 watch(() => store.timelineFocus, target => {
   if (!target || !scroller.value) return
-  const index = store.rows.findIndex(row => row.kind === 'device' && row.sourceId === target.sourceId)
+  const index = store.rows.findIndex(row => row.sourceId === target.sourceId && (target.trackId === undefined ? row.kind === 'device' || row.kind === 'source' : row.trackIds.includes(target.trackId)))
   if (index < 0) return
+  const top = index * rowHeight
+  if (target.trackId !== undefined && top >= scrollTop.value && top + rowHeight <= scrollTop.value + height - ruler) return
   verticalMotion.cancel()
-  scroller.value.scrollTop = index * rowHeight
+  scroller.value.scrollTop = top
   scroll()
 }, { flush: 'post' })
+watch(() => store.computeModelId, () => { verticalMotion.cancel(); if (scroller.value) scroller.value.scrollTop = 0; scroll() }, { flush: 'post' })
 watch(resolvedTheme, () => { labelWidths.clear(); geometryCache.clear(); scheduleBackground() })
 watch(() => [store.overview, store.overviewMetric, store.overviewActivity], () => { overviewHover.value = null; updateData(); scheduleBackground() })
 watch(() => store.selectedCuId, id => {
@@ -493,6 +501,7 @@ watch(() => store.selectedCuId, id => {
   if (top < scrollTop.value || top > scrollTop.value + height - ruler - rowHeight) scroller.value.scrollTop = top
 })
 onMounted(() => {
+  if (scroller.value) scroller.value.scrollTop = store.ui.timelineScrollTop
   observer = new ResizeObserver(() => { width = viewportElement.value?.clientWidth ?? width; height = viewportElement.value?.clientHeight ?? height; invalidate() })
   if (viewportElement.value) observer.observe(viewportElement.value)
   invalidate()
@@ -506,9 +515,9 @@ onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.s
     <div class="timeline-overview-strip">
       <canvas ref="overviewCanvas" class="timeline-overview" height="34" role="img" :aria-label="`${store.overviewMetric === 'density' ? '全局任务密度' : '全局任务利用率'}与可视窗口，可拖动边缘缩放`" :aria-busy="store.overviewActivityLoading" @pointerdown="overviewDown" @pointermove="overviewMove" @pointerup="overviewUp" @pointercancel="overviewUp" @pointerleave="overviewHover = null" />
       <div class="timeline-overview-controls">
-        <select v-model="store.overviewMetric" aria-label="全局概览指标" title="任务利用率按每段时间内各 CU 的活动时间并集计算，纵轴固定为 0–100%；统计所有计算卡，独立于当前选区和卡筛选。">
+        <select v-model="store.overviewMetric" aria-label="全局概览指标" :title="store.supportsCu ? '任务利用率按每段时间内各 CU 的活动时间并集计算，纵轴固定为 0–100%；统计所有计算卡，独立于当前选区和卡筛选。' : '按原始轨道统计区间事件数量，独立于当前选区。'">
           <option value="density">全局任务密度</option>
-          <option value="utilization">全局任务利用率</option>
+          <option v-if="store.supportsCu" value="utilization">全局任务利用率</option>
         </select>
         <span v-if="store.overviewMetric === 'utilization'" class="timeline-overview-summary" :title="store.overviewActivityError ?? `${overviewBusy} / ${overviewCapacity} CU·ns`">{{ overviewSummary }}</span>
         <span v-else>事件数量 · 对数刻度</span>
@@ -517,6 +526,13 @@ onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.s
     </div>
     <div ref="viewportElement" class="timeline-viewport">
       <canvas ref="background" class="timeline-background" aria-hidden="true" />
+      <div v-if="!store.supportsCu" class="timeline-track-heading">
+        <span>原始轨道</span>
+        <div role="group" aria-label="轨道展开与收起">
+          <button class="icon-button" aria-label="全部展开轨道" title="全部展开轨道" :disabled="!store.displayedSources.length" @click="store.setTracksExpanded(true)"><ChevronsUpDown :size="14" /></button>
+          <button class="icon-button" aria-label="全部收起轨道" title="全部收起轨道，汇总显示子轨道事件" :disabled="!store.displayedSources.length" @click="store.setTracksExpanded(false)"><ChevronsDownUp :size="14" /></button>
+        </div>
+      </div>
       <canvas ref="overlay" class="timeline-overlay" :class="{ panning }" :aria-busy="store.zooming || store.panningViewport" role="img" aria-label="轨道与任务时间轴。左键拖动框选，右键拖动平移，W 在鼠标处放大，S 在鼠标处缩小，A 向左平移，D 向右平移。点击事件定位到鼠标对应时间。" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @pointerleave="pointerLeave" @dblclick="doubleClick" @wheel.prevent="wheel" @contextmenu.prevent />
       <div ref="scroller" class="timeline-vertical-scroller" @scroll="scroll" @wheel.prevent="wheel" @pointerdown="stopMotion"><div :style="{ height: `${store.rows.length * rowHeight + ruler}px` }" /></div>
       <div v-if="querying" class="timeline-query-loading"><LoaderCircle :size="12" class="spin" />更新窗口</div>

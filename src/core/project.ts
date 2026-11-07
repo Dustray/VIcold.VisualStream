@@ -3,7 +3,7 @@ import { openWorkspaceDatabase } from './database'
 
 export function parseProject(text: string): ProjectSnapshot {
   const value = JSON.parse(text) as ProjectSnapshot
-  if (value.version !== 1 || value.computeModel?.id !== 'megakernel' || value.computeModel.version !== '1') throw new Error('不支持的项目版本或计算模式')
+  if (value.version !== 1 || !['megakernel', 'default'].includes(value.computeModel?.id) || value.computeModel.version !== '1') throw new Error('不支持的项目版本或计算模式')
   if (!Array.isArray(value.sources) || value.sources.length > 16 || !value.sources.length) throw new Error('项目来源列表无效')
   const timestamp = (time: unknown): time is string => typeof time === 'string' && /^-?\d{1,19}$/.test(time) && BigInt(time) >= -(1n << 63n) && BigInt(time) < (1n << 63n)
   if (!timestamp(value.time) || !timestamp(value.viewport?.start) || !timestamp(value.viewport?.end) || BigInt(value.viewport.end) <= BigInt(value.viewport.start)) throw new Error('项目时间范围无效')

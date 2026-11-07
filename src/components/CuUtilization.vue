@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, toRef, watch } from 'vue'
 import { Info, LoaderCircle } from 'lucide-vue-next'
 import { duration, formatTime } from '../core/time'
 import type { GroupStatistics, TimeRange } from '../core/types'
@@ -8,8 +8,8 @@ import { LatestQuery } from '../engine/latest-query'
 import { useReplayStore } from '../stores/replay'
 
 const store = useReplayStore()
-const scope = ref<'full' | 'selection'>(store.selection ? 'selection' : 'full')
-const sort = ref<'cu' | 'descending' | 'ascending'>('cu')
+const scope = toRef(store.ui, 'utilizationScope')
+const sort = toRef(store.ui, 'utilizationSort')
 const loading = ref(false)
 const error = ref('')
 const statistics = shallowRef<GroupStatistics[] | null>(null)

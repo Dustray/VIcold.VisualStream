@@ -20,7 +20,7 @@ export interface TimelineGeometry {
 export class TimelineGeometryCache {
   private readonly rows = new Map<string, { tracks: TimelineTrackData[]; geometry: TimelineGeometry }>()
 
-  constructor(private readonly paint: (name: string) => string) {}
+  constructor(private readonly paint: (name: string) => string, private readonly label: (name: string) => string = name => name.replace('TASK_', '')) {}
 
   read(id: string, tracks: TimelineTrackData[], origin: bigint): TimelineGeometry {
     const cached = this.rows.get(id)
@@ -36,7 +36,7 @@ export class TimelineGeometryCache {
       start: Number(item.start - origin),
       end: Number(item.end - origin),
       paint: this.paint(item.name ?? ''),
-      label: item.name?.replace('TASK_', '') ?? '',
+      label: this.label(item.name ?? ''),
     })
     const geometry = { origin, events: events.map(project), bins: bins.map(project) }
     this.rows.set(id, { tracks: [...tracks], geometry })

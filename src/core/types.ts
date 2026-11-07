@@ -1,4 +1,5 @@
 export type Nanoseconds = bigint
+export type ComputeModelId = 'default' | 'megakernel'
 export type SqlValue = bigint | number | string | Uint8Array | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -54,21 +55,25 @@ export interface TraceFileParser {
 export interface GroupResource { id: string; index: number; cuId: string; trackIds: number[] }
 export interface CuResource { id: string; index: number; deviceId: string; groups: GroupResource[] }
 export interface DeviceResource { id: string; label: string; rank: number | null; inferred: boolean; cus: CuResource[] }
-export interface ReplayEvent extends RawSpan { sourceId: string; cuId: string; groupId: string; deviceId: string }
-export interface ReplayDensity extends DensityBin { sourceId: string; cuId: string; groupId: string }
+export interface ReplayEvent extends RawSpan { sourceId: string; cuId?: string; groupId?: string; deviceId?: string }
+export interface ReplayDensity extends DensityBin { sourceId: string; cuId?: string; groupId?: string }
 export interface TimelineRow {
   id: string
-  kind: 'device' | 'group' | 'track'
+  kind: 'source' | 'device' | 'group' | 'track'
   label: string
   subtitle: string
   sourceId: string
   cuId?: string
   groupId?: string
+  treeDepth?: number
+  hasChildren?: boolean
+  collapsed?: boolean
   trackIds: number[]
 }
 export interface ReplayDataSource {
+  readonly modelId: ComputeModelId
   readonly source: ParsedTraceSource
-  readonly device: DeviceResource
+  readonly device: DeviceResource | null
   readonly diagnostics: string[]
   readonly trackMap: ReadonlyMap<number, { cuId: string; groupId: string }>
   offset: bigint
@@ -82,13 +87,13 @@ export interface ReplayDataSource {
   boundary(time: bigint, direction: -1 | 1): Promise<bigint | null>
 }
 export interface ComputeModelPlugin {
-  readonly id: string
+  readonly id: ComputeModelId
   build(source: ParsedTraceSource): Promise<ReplayDataSource>
 }
 export interface Bookmark { id: string; time: bigint; label: string }
 export interface ProjectSnapshot {
   version: 1
-  computeModel: { id: 'megakernel'; version: '1' }
+  computeModel: { id: ComputeModelId; version: '1' }
   sources: { filename: string; fingerprint: string; parser: { id: 'perfetto'; version: '1' }; offset: string }[]
   visibleSources?: string[]
   time: string

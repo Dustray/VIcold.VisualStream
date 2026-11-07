@@ -1,6 +1,6 @@
 # VisualStream
 
-大模型推理记录的重放工作台，同时提供 **浏览器版与 Tauri 2 桌面版**，共用 Vue 3 + TypeScript 前端。当前实现 **Megakernel + Perfetto Protobuf**，默认空白启动，由用户导入记录；计算模式和文件解析器分别注册。
+大模型推理记录的重放工作台，同时提供 **浏览器版与 Tauri 2 桌面版**，共用 Vue 3 + TypeScript 前端。当前提供 **Megakernel / 默认计算模式 + Perfetto Protobuf**，默认空白启动，由用户导入记录；计算模式和文件解析器分别注册。
 
 ## 浏览器版启动
 
@@ -83,8 +83,15 @@ git push origin v0.1.2
 
 ## 已实现
 
-- 独立配置计算模式与文件解析器；当前只有 Megakernel 模式和 Perfetto 解析器，支持自动识别。
-- 多文件会话、SHA-256 去重、导入进度、取消和文件错误提示。
+- 独立配置计算模式与文件解析器；当前提供 Megakernel、默认两种模式与 Perfetto 解析器，支持自动识别。
+- 「默认」模式按文件及原始轨道层级展示区间事件，保留原始轨道名和轨道 ID；折叠父轨道时在父行汇总显示后代事件，展开后恢复各自轨道。时间轴「原始轨道」旁的符号按钮可全部展开或全部收起当前显示文件的轨道。不要求 `block_N` 命名，也不推断 CU。隐藏资源矩阵、CU 利用率、计算卡筛选及 CU 利用率概览，保留任务表、事件详情、搜索、选区统计、播放和书签。
+- 已导入文件可以直接切换计算模式，复用解析线程并保留时间位置、时间窗口、选区、书签与文件勾选。历史文件按当前选择的计算模式加入会话；项目文件记录模式，重新打开时自动恢复，既有 Megakernel 项目仍兼容。
+- 多会话 / 多项目标签页：位于第二层工具栏，使用「＋」新建，支持切换、关闭和双击 / F2 重命名；每个会话可以导入多个文件。
+- 各会话独立保留文件勾选、播放位置与速度、时间轴范围与纵向位置、选区、书签、搜索及侧栏折叠状态。切换会话时暂停原会话，返回后无需重新解析。
+- 历史文件和界面主题在会话间共享；同一历史文件可以加入不同会话。关闭会话会释放它的解析线程和缓存，不影响其他会话；关闭最后一个标签会新建空会话。
+- 打开项目时，优先使用当前空会话；当前会话已有文件时在新标签中恢复项目。保存项目只保存当前标签，项目格式保持兼容。标签页本身在刷新或退出后不保留，需要继续分析时可分别保存项目。
+- 标签获得焦点后，可用左右方向键、Home / End 切换，Delete 关闭；中键点击标签也可关闭。标签较多时支持横向滚动。
+- 多文件导入、SHA-256 去重、导入进度、取消和文件错误提示；后台导入始终归属原会话。
 - 多卡 → CU → Group 资源树；`block_N` 解释为 CU N，不同 CU 的 `group_0` 各自独立。
 - Canvas CU 矩阵、当前任务表、事件详情、原始任务名称与额外属性查询。
 - 时间轴概览、轨道纵向滚动、光标缩放、平移、播放头定位、轨道展开与事件选择。
@@ -149,8 +156,8 @@ git push origin v0.1.2
 File
   → 解析 Worker：ParserRegistry → PerfettoParser → 官方 Trace Processor WASM
   → ParsedTraceSource：轨道、区间查询、密度、统计、搜索
-  → ComputeModelRegistry → MegakernelModel
-  → ReplayDataSource：Device / CU / Group 与会话时间
+  → ComputeModelRegistry → MegakernelModel / DefaultModel
+  → ReplayDataSource：原始轨道 / 可选 Device、CU、Group 与会话时间
   → PlaybackClock + Pinia
   → Vue 3 工作台 + Canvas 2D 时间轴 / CU 矩阵
 ```
@@ -171,6 +178,8 @@ CU 矩阵仅重画任务名称、并发数或选中状态发生变化的单元�
 | `src/core/registry.ts` | 两种独立插件注册表 |
 | `src/parsers/perfetto/` | 通用 Perfetto 解码、RPC 与 SQL，不解释 CU |
 | `src/models/megakernel.ts` | block → CU 与 Group 归属，不依赖 Perfetto SQL |
+| `src/models/default.ts` | 不推断硬件资源，保留所有区间事件及原始轨道身份 |
+| `src/engine/track-tree.ts` | 原始轨道父子层级、折叠及异常父链处理 |
 | `src/engine/` | 播放时钟、活动区间索引 |
 | `src/stores/replay.ts` | 查询缓存、来源、项目与界面联动 |
 | `src/components/` | 时间轴、CU 视图与分析面板 |
@@ -205,7 +214,8 @@ Windows 桌面构建完成后执行 `npm run test:desktop`，直接启动发行�
 - 当前是离线重放。样例没有硬件 counter、warp 记录、任务到算子映射或 flow，相关硬件指标显示未采集。CU 利用率视图提供基于任务记录的活动占比，不推测硬件忙碌率、带宽和通信指标。
 - 只支持 Perfetto Protobuf 文件。JSON、Hipprof、自定义 `.prof` 等仅预留接口。
 - 单文件首版限制 256 MB；每个来源运行一个 WASM 实例，多个大文件会增加内存占用。尚未做 GB 级记录与长时间运行的容量验收。
-- 当前按一份来源文件对应一个设备资源解释，支持样例的双 rank 双文件。单文件内包含多张卡时，需要进一步提供明确的设备字段与映射规则。
+- 默认模式当前使用已有 Megakernel TP1 / TP2 文件验证原始轨道与区间事件重放；其他 Perfetto 记录、嵌套事件展示和 counter / flow 等数据类型待取得对应样例后继续验证与适配。
+- Megakernel 模式当前按一份来源文件对应一个设备资源解释，支持样例的双 rank 双文件。单文件内包含多张卡时，需要进一步提供明确的设备字段与映射规则。
 - 活动窗口上限 250,000 个事件；时间轴精细窗口上限 35,000 个事件，超出时退回密度显示。
 - Perfetto v59 会重组同名轨道。解析器利用 descriptor UUID 元数据恢复父链，CU 与事件归属已验证；界面展开的是 Trace Processor 的规范化轨道，不等同于文件内的所有原始 TrackDescriptor。逐一保留原始 descriptor 的检查器仍待补充。
 - 实测硬件性能曲线、真实跨卡时钟同步、warp 视图、拷贝通信专用视图与原生大文件后端属于后续工作。当前没有宣称固定帧率或硬件利用率。

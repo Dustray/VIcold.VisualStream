@@ -3,7 +3,7 @@ import type { ComputeModelPlugin, CuResource, DeviceResource, EventQuery, GroupR
 export class MegakernelModel implements ComputeModelPlugin {
   readonly id = 'megakernel'
 
-  async build(source: ParsedTraceSource): Promise<ReplayDataSource> {
+  async build(source: ParsedTraceSource): Promise<MegakernelDataSource> {
     const tracks = await source.tracks()
     const byId = new Map(tracks.map(track => [track.id, track]))
     const sourceId = source.metadata.id
@@ -58,6 +58,7 @@ export class MegakernelModel implements ComputeModelPlugin {
 }
 
 class MegakernelDataSource implements ReplayDataSource {
+  readonly modelId = 'megakernel'
   offset = 0n
   constructor(readonly source: ParsedTraceSource, readonly device: DeviceResource, readonly trackMap: ReadonlyMap<number, { cuId: string; groupId: string }>, readonly diagnostics: string[]) {}
   get range(): TimeRange { return { start: this.offset, end: this.source.metadata.end - this.source.metadata.start + this.offset } }

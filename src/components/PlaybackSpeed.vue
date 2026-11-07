@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, toRef, watch } from 'vue'
 import { duration } from '../core/time'
-import { defaultPlaybackSpeed, playbackSpeeds as speeds } from '../core/playback-speed'
+import { playbackSpeeds as speeds } from '../core/playback-speed'
 import { useReplayStore } from '../stores/replay'
 
 const store = useReplayStore()
-const lastPreset = ref(speeds.indexOf(defaultPlaybackSpeed))
+const lastPreset = toRef(store.ui, 'lastPreset')
 const demoSpeed = computed(() => Math.max(0.000001, Number(duration(store.bounds)) / 20e9))
-const demo = ref(false)
+const demo = toRef(store.ui, 'demo')
 const preset = computed(() => speeds.findIndex(value => Math.abs(value - store.speed) < 1e-10))
 const position = computed(() => preset.value < 0 ? lastPreset.value : preset.value)
 const speedLabel = computed(() => `${store.speed.toLocaleString('en-US', { maximumFractionDigits: 6 })}×`)

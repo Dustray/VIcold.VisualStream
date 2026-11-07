@@ -1,31 +1,49 @@
-import { computed, markRaw, onScopeDispose, ref, shallowRef, watch } from 'vue'
-import { defineStore } from 'pinia'
+import { computed, inject, markRaw, onScopeDispose, provide, reactive, ref, shallowRef, watch, type InjectionKey } from 'vue'
+import { defineStore, storeToRefs, type Pinia } from 'pinia'
 import { ComputeModelRegistry } from '../core/registry'
 import { WorkerTraceSource } from '../core/worker-source'
 import { clampTime, duration, fitRange, formatTime, timeBuckets } from '../core/time'
-import { parseProject, persistProject } from '../core/project'
-import { defaultPlaybackSpeed, stepPlaybackSpeed } from '../core/playback-speed'
-import { projectFileLimit, projectFileLimitMessage } from '../core/files'
-import { forgetFile, readFileHistory, readHistoryFile, rememberFile, type HistoryFile } from '../core/file-history'
+import { persistProject } from '../core/project'
+import { defaultPlaybackSpeed, playbackSpeeds, stepPlaybackSpeed } from '../core/playback-speed'
+import { readHistoryFile } from '../core/file-history'
+import { useFileHistoryStore } from './file-history'
 import { workspaceHost } from '../host'
-import type { ActivityBin, Bookmark, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
+import type { ActivityBin, Bookmark, ComputeModelId, ImportProgress, ProjectSnapshot, RangeStatistics, RawTrack, ReplayDataSource, ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
 import { IntervalIndex } from '../engine/interval-index'
 import { LatestQuery } from '../engine/latest-query'
 import { PlaybackClock } from '../engine/playback-clock'
 import { ViewportZoom } from '../engine/viewport-zoom'
 import { ViewportPan } from '../engine/viewport-pan'
 import { MegakernelModel } from '../models/megakernel'
+import { DefaultModel } from '../models/default'
+import { trackRows } from '../engine/track-tree'
 
-const modes = new ComputeModelRegistry().register(new MegakernelModel())
+const modes = new ComputeModelRegistry().register(new MegakernelModel()).register(new DefaultModel())
 
-export const useReplayStore = defineStore('replay', () => {
+function setupReplay() {
   const sources = shallowRef<ReplayDataSource[]>([])
-  const computeModelId = ref('megakernel')
+  const computeModelId = ref<ComputeModelId>('megakernel')
+  const supportsCu = computed(() => computeModelId.value === 'megakernel')
+  const computeModelLabel = computed(() => supportsCu.value ? 'Megakernel' : '默认')
   const sourceParserId = ref('perfetto')
-  const historyFiles = shallowRef<HistoryFile[]>([])
-  const historyLoading = ref(true)
+  const history = useFileHistoryStore()
+  const { files: historyFiles, loading: historyLoading } = storeToRefs(history)
+  const ui = reactive({
+    replayInfoExpanded: true,
+    bookmarksExpanded: true,
+    sessionExpanded: true,
+    historyExpanded: true,
+    timelineScrollTop: 0,
+    upperRatio: null as number | null,
+    restoreUpperRatio: null as number | null,
+    utilizationScope: 'full' as 'full' | 'selection',
+    utilizationSort: 'cu' as 'cu' | 'descending' | 'ascending',
+    inspectorTab: 'details' as 'details' | 'range' | 'search',
+    demo: false,
+    lastPreset: playbackSpeeds.indexOf(defaultPlaybackSpeed),
+  })
   const selectedSourceIds = ref(new Set<string>())
-  const timelineFocus = shallowRef<{ sourceId: string } | null>(null)
+  const timelineFocus = shallowRef<{ sourceId: string; trackId?: number } | null>(null)
   const loading = ref(false)
   const progress = ref<ImportProgress>({ stage: '', fraction: 0 })
   const currentTime = ref(0n)
@@ -53,6 +71,7 @@ export const useReplayStore = defineStore('replay', () => {
   const overviewActivityError = ref<string | null>(null)
   const bookmarks = ref<Bookmark[]>([])
   const expandedGroups = ref(new Set<string>())
+  const collapsedTracks = ref(new Set<string>())
   const searchText = ref('')
   const searchResults = shallowRef<ReplayEvent[]>([])
   const searching = ref(false)
@@ -64,6 +83,9 @@ export const useReplayStore = defineStore('replay', () => {
   const trackCache = new Map<string, RawTrack[]>()
   const clock = markRaw(new PlaybackClock())
   clock.setSpeed(defaultPlaybackSpeed)
+  let disposed = false
+  let projectGeneration = 0
+  const openingSources = new Set<WorkerTraceSource>()
   let importAbort: AbortController | null = null
   let loadGeneration = 0
   let activeGeneration = 0
@@ -79,7 +101,7 @@ export const useReplayStore = defineStore('replay', () => {
     notify(String(error), 'error')
     statisticsLoading.value = false
   })
-  onScopeDispose(() => statisticsQuery.cancel())
+  onScopeDispose(dispose)
   let overviewVersion = 0
   let overviewActivityVersion = 0
 
@@ -90,19 +112,24 @@ export const useReplayStore = defineStore('replay', () => {
   watch(bounds, stopZoom, { flush: 'sync' })
   const totalEvents = computed(() => sources.value.reduce((result, source) => result + source.source.metadata.eventCount, 0))
   const selectedSources = computed(() => sources.value.filter(source => selectedSourceIds.value.has(source.source.metadata.id)))
-  const displayedSources = computed(() => selectedSources.value.filter(source => !selectedDeviceId.value || source.device.id === selectedDeviceId.value))
-  const devices = computed(() => selectedSources.value.map(source => source.device))
+  const displayedSources = computed(() => selectedSources.value.filter(source => !selectedDeviceId.value || source.device?.id === selectedDeviceId.value))
+  const devices = computed(() => selectedSources.value.flatMap(source => source.device ? [source.device] : []))
   const cus = computed(() => devices.value.flatMap(device => device.cus))
-  const displayedDevices = computed(() => displayedSources.value.map(source => source.device))
+  const displayedDevices = computed(() => displayedSources.value.flatMap(source => source.device ? [source.device] : []))
+  const totalTracks = computed(() => sources.value.reduce((total, source) => total + source.source.metadata.trackCount, 0))
+  const activeTrackCount = computed(() => new Set(activeEvents.value.map(event => `${event.sourceId}:${event.trackId}`)).size)
+  const trackLabel = (sourceId: string, trackId: number) => trackCache.get(sourceId)?.find(track => track.id === trackId)?.name || `轨道 ${trackId}`
   const diagnostics = computed(() => [...new Set(sources.value.flatMap(source => source.diagnostics))])
   const activeByCu = computed(() => {
     const result = new Map<string, ReplayEvent[]>()
-    for (const event of activeEvents.value) { const items = result.get(event.cuId) ?? []; items.push(event); result.set(event.cuId, items) }
+    for (const event of activeEvents.value) { if (!event.cuId) continue; const items = result.get(event.cuId) ?? []; items.push(event); result.set(event.cuId, items) }
     return result
   })
   const rows = computed<TimelineRow[]>(() => displayedSources.value.flatMap(source => {
-    const result: TimelineRow[] = [{ id: source.device.id, kind: 'device', label: source.device.label, subtitle: source.device.rank === null ? 'Megakernel' : `Rank ${source.device.rank}`, sourceId: source.source.metadata.id, trackIds: [] }]
-    for (const cu of source.device.cus) for (const group of cu.groups) {
+    const device = source.device
+    if (!device) return [{ id: `${source.source.metadata.id}/source`, kind: 'source' as const, label: source.source.metadata.filename, subtitle: 'Perfetto', sourceId: source.source.metadata.id, trackIds: [] }, ...trackRows(source.source.metadata.id, trackCache.get(source.source.metadata.id) ?? [], collapsedTracks.value)]
+    const result: TimelineRow[] = [{ id: device.id, kind: 'device', label: device.label, subtitle: device.rank === null ? 'Megakernel' : `Rank ${device.rank}`, sourceId: source.source.metadata.id, trackIds: [] }]
+    for (const cu of device.cus) for (const group of cu.groups) {
       result.push({ id: group.id, kind: 'group', label: `CU ${String(cu.index).padStart(2, '0')}`, subtitle: `group_${group.index}`, sourceId: source.source.metadata.id, cuId: cu.id, groupId: group.id, trackIds: group.trackIds })
       if (expandedGroups.value.has(group.id)) for (const trackId of group.trackIds) {
         const track = trackCache.get(source.source.metadata.id)?.find(track => track.id === trackId)
@@ -113,6 +140,7 @@ export const useReplayStore = defineStore('replay', () => {
   }))
 
   function notify(message: string, kind: 'error' | 'info' = 'info'): void {
+    if (disposed) return
     if (toastTimer) clearTimeout(toastTimer)
     toast.value = { message, kind }
     toastTimer = setTimeout(() => { toast.value = null }, kind === 'error' ? 12000 : 4500)
@@ -136,6 +164,7 @@ export const useReplayStore = defineStore('replay', () => {
     selectedDeviceId.value = null
     eventArgs.value = {}
     selection.value = null
+    ui.utilizationScope = 'full'
     bookmarks.value = []
     searchResults.value = []
     searchText.value = ''
@@ -146,20 +175,101 @@ export const useReplayStore = defineStore('replay', () => {
     statisticsLoading.value = false
     selectionStats.value = null
     expandedGroups.value = new Set()
+    collapsedTracks.value = new Set()
     looping.value = false
     clock.setLoop(null)
     clock.setBuffering(false)
   }
 
+  function dispose(): void {
+    if (disposed) return
+    disposed = true
+    loadGeneration++
+    projectGeneration++
+    activeGeneration++
+    overviewVersion++
+    overviewActivityVersion++
+    searchVersion++
+    activeTarget = null
+    importAbort?.abort()
+    for (const source of openingSources) source.close()
+    openingSources.clear()
+    statisticsQuery.cancel()
+    if (toastTimer) clearTimeout(toastTimer)
+    stopZoom()
+    clock.dispose()
+    for (const model of sources.value) model.source.close()
+    sources.value = []
+    selectedEvent.value = null
+    trackCache.clear()
+    activeCache = null
+  }
   async function initialize(): Promise<void> {
+    try { await history.initialize() }
+    catch { notify('无法读取本机历史文件，仍可直接导入记录。', 'error') }
+  }
+
+  function configureMode(id: ComputeModelId): void {
+    computeModelId.value = id
+    activeView.value = id === 'megakernel' ? 'resources' : 'tasks'
+    overviewMetric.value = id === 'megakernel' ? 'utilization' : 'density'
+    expandedGroups.value = new Set()
+    collapsedTracks.value = new Set()
+    ui.timelineScrollTop = 0
+    pendingProject.value = null
+  }
+  async function setComputeModel(id: ComputeModelId): Promise<boolean> {
+    if (disposed || loading.value) return false
+    if (id === computeModelId.value) return true
+    const mode = modes.get(id)
+    if (!sources.value.length) { configureMode(id); return true }
+    const generation = ++loadGeneration
+    const previousTime = currentTime.value
+    const previousViewport = { ...viewport.value }
+    clock.pause()
+    stopZoom()
+    loading.value = true
+    progress.value = { stage: `切换计算模式 · ${id === 'default' ? '默认' : 'Megakernel'}`, fraction: 0.4 }
     try {
-      const saved = await readFileHistory()
-      historyFiles.value = [...historyFiles.value, ...saved.filter(file => !historyFiles.value.some(existing => existing.fingerprint === file.fingerprint))].sort((left, right) => right.openedAt - left.openedAt)
-    } catch { notify('无法读取本机历史文件，仍可直接导入记录。', 'error') }
-    finally { historyLoading.value = false }
+      const models = await Promise.all(sources.value.map(async previous => {
+        const model = await mode.build(previous.source)
+        model.offset = previous.offset
+        return markRaw(model)
+      }))
+      if (generation !== loadGeneration) return false
+      activeGeneration++
+      activeTarget = null
+      activeCache = null
+      overviewVersion++
+      overviewActivityVersion++
+      overview.value = []
+      overviewActivity.value = []
+      overviewActivityLoading.value = false
+      overviewActivityError.value = null
+      selectedEvent.value = null
+      selectedCuId.value = null
+      selectedDeviceId.value = null
+      eventArgs.value = {}
+      configureMode(id)
+      sources.value = models
+      clock.configure(bounds.value)
+      clock.setLoop(looping.value ? selection.value : null)
+      seek(previousTime)
+      setViewport(previousViewport)
+      await refreshOverview()
+      if (generation !== loadGeneration) return false
+      notify(`已切换为${computeModelLabel.value}计算模式`)
+      return true
+    } catch (error) {
+      if (generation === loadGeneration) notify(`无法切换计算模式：${error instanceof Error ? error.message : String(error)}`, 'error')
+      return false
+    } finally {
+      if (generation === loadGeneration) { loading.value = false; void refreshActive(currentTime.value, true) }
+    }
   }
 
   async function importFiles(files: File[], replace = false): Promise<void> {
+    if (disposed || !files.length) return
     importAbort?.abort()
     importAbort = new AbortController()
     const controller = importAbort
@@ -175,17 +285,22 @@ export const useReplayStore = defineStore('replay', () => {
         if (generation !== loadGeneration) { source.close(); return }
         const existing = sources.value.find(existing => existing.source.metadata.fingerprint === source.metadata.fingerprint)
         if (existing) { source.close(); selectedSourceIds.value.add(existing.source.metadata.id); selectedDeviceId.value = null; notify(`文件已在当前会话中：${file.name}`); continue }
+        openingSources.add(source)
         try {
           const model = await modes.get(computeModelId.value).build(source)
-          trackCache.set(source.metadata.id, await source.tracks())
+          const tracks = await source.tracks()
+          if (generation !== loadGeneration) { source.close(); return }
+          openingSources.delete(source)
+          trackCache.set(source.metadata.id, tracks)
           sources.value = [...sources.value, markRaw(model)]
           selectedSourceIds.value.add(source.metadata.id)
           selectedDeviceId.value = null
           try {
-            const history = await rememberFile(file, source.metadata.fingerprint, source.metadata.parserId, computeModelId.value)
-            historyFiles.value = [history, ...historyFiles.value.filter(existing => existing.fingerprint !== history.fingerprint)]
+            await history.remember(file, source.metadata.fingerprint, source.metadata.parserId, computeModelId.value)
           } catch { notify(`文件已导入，但无法保存到历史记录：${file.name}`, 'error') }
         } catch (error) { source.close(); throw error }
+        finally { openingSources.delete(source) }
+        if (generation !== loadGeneration) return
       }
       if (!sources.value.length) return
       clock.configure(bounds.value)
@@ -195,8 +310,9 @@ export const useReplayStore = defineStore('replay', () => {
       clock.seek(target)
       progress.value = { stage: '生成全局任务密度', fraction: 0.98 }
       await refreshOverview()
+      if (generation !== loadGeneration) return
       if (pendingProject.value) applyPendingProject()
-      else notify(`已载入 ${sources.value.length} 个来源 · ${cus.value.length} 个 CU · ${totalEvents.value.toLocaleString()} 个事件`)
+      else notify(`已载入 ${sources.value.length} 个来源 · ${supportsCu.value ? `${cus.value.length} 个 CU` : `${totalTracks.value} 条原始轨道`} · ${totalEvents.value.toLocaleString()} 个事件`)
     } catch (error) { if (!controller.signal.aborted) notify(error instanceof Error ? error.message : String(error), 'error') }
     finally {
       if (generation === loadGeneration) {
@@ -209,6 +325,8 @@ export const useReplayStore = defineStore('replay', () => {
 
   function cancelImport(): void {
     importAbort?.abort()
+    for (const source of openingSources) source.close()
+    openingSources.clear()
     loadGeneration++
     loading.value = false
     clock.setBuffering(false)
@@ -220,7 +338,7 @@ export const useReplayStore = defineStore('replay', () => {
     const source = sources.value.find(source => source.source.metadata.id === id)
     if (!source) return
     if (!selectedSourceIds.value.has(id)) { notify('请先勾选该文件，再定位到时间轴'); return }
-    if (selectedDeviceId.value !== source.device.id) selectedDeviceId.value = null
+    if (selectedDeviceId.value !== source.device?.id) selectedDeviceId.value = null
     timelineFocus.value = { sourceId: id }
   }
   function toggleSource(id: string): void {
@@ -240,16 +358,15 @@ export const useReplayStore = defineStore('replay', () => {
     if (!history) return
     try {
       const file = await readHistoryFile(fingerprint)
+      if (disposed) return
       if (!file) throw new Error('历史文件已不存在，请重新导入原文件。')
-      computeModelId.value = history.computeModelId
       sourceParserId.value = history.parserId
       await importFiles([file])
     } catch (error) { notify(error instanceof Error ? error.message : String(error), 'error') }
   }
   async function removeHistory(fingerprint: string): Promise<void> {
     try {
-      await forgetFile(fingerprint)
-      historyFiles.value = historyFiles.value.filter(file => file.fingerprint !== fingerprint)
+      await history.remove(fingerprint)
     } catch (error) { notify(`无法移除历史文件：${error instanceof Error ? error.message : String(error)}`, 'error') }
   }
 
@@ -274,7 +391,7 @@ export const useReplayStore = defineStore('replay', () => {
     } catch (error) { if (version === overviewVersion) notify(String(error), 'error') }
   }
   async function refreshOverviewActivity(): Promise<void> {
-    if (!selectedSources.value.length || overviewActivity.value.length || overviewActivityLoading.value || loading.value) return
+    if (!supportsCu.value || !selectedSources.value.length || overviewActivity.value.length || overviewActivityLoading.value || loading.value) return
     const version = ++overviewActivityVersion
     const range = { ...bounds.value }
     const models = [...selectedSources.value]
@@ -289,14 +406,15 @@ export const useReplayStore = defineStore('replay', () => {
     } catch (error) { if (version === overviewActivityVersion) overviewActivityError.value = error instanceof Error ? error.message : String(error) }
     finally { if (version === overviewActivityVersion) overviewActivityLoading.value = false }
   }
-  watch([selectedSources, overviewMetric, loading], ([models], [previousModels]) => {
+  watch([selectedSources, overviewMetric, loading, supportsCu], ([models], [previousModels]) => {
     if (models !== previousModels) {
       overviewActivityVersion++
       overviewActivity.value = []
       overviewActivityLoading.value = false
       overviewActivityError.value = null
     }
-    if (overviewMetric.value === 'utilization') void refreshOverviewActivity()
+    if (!supportsCu.value && overviewMetric.value !== 'density') overviewMetric.value = 'density'
+    if (supportsCu.value && overviewMetric.value === 'utilization') void refreshOverviewActivity()
   })
   function removeSource(id: string): void {
     clock.pause()
@@ -382,7 +500,8 @@ export const useReplayStore = defineStore('replay', () => {
   }
   async function selectEvent(event: ReplayEvent): Promise<void> {
     selectedEvent.value = event
-    selectedCuId.value = event.cuId
+    selectedCuId.value = event.cuId ?? null
+    if (!supportsCu.value) focusEventTrack(event)
     eventArgs.value = {}
     const source = sources.value.find(source => source.source.metadata.id === event.sourceId)
     if (source && event.argSetId) {
@@ -404,6 +523,36 @@ export const useReplayStore = defineStore('replay', () => {
     if (event) void selectEvent(event)
     else { selectedEvent.value = null; eventArgs.value = {} }
   }
+  function focusEventTrack(event: ReplayEvent): void {
+    const tracks = trackCache.get(event.sourceId) ?? []
+    const byId = new Map(tracks.map(track => [track.id, track]))
+    const collapsed = new Set(collapsedTracks.value)
+    const visited = new Set<number>()
+    let track = byId.get(event.trackId)
+    while (track && !visited.has(track.id)) {
+      visited.add(track.id)
+      collapsed.delete(`${event.sourceId}/track/${track.id}`)
+      track = track.parentId === null ? undefined : byId.get(track.parentId)
+    }
+    collapsedTracks.value = collapsed
+    timelineFocus.value = { sourceId: event.sourceId, trackId: event.trackId }
+  }
+  function toggleTrack(id: string): void { const next = new Set(collapsedTracks.value); if (next.has(id)) next.delete(id); else next.add(id); collapsedTracks.value = next }
+  function setTracksExpanded(expanded: boolean): void {
+    if (supportsCu.value) return
+    const next = new Set(collapsedTracks.value)
+    for (const source of displayedSources.value) {
+      const sourceId = source.source.metadata.id
+      const tracks = trackCache.get(sourceId) ?? []
+      const parents = new Set(tracks.filter(track => track.parentId !== null && track.parentId !== track.id).map(track => track.parentId))
+      for (const track of tracks) {
+        const id = `${sourceId}/track/${track.id}`
+        if (expanded) next.delete(id)
+        else if (parents.has(track.id)) next.add(id)
+      }
+    }
+    collapsedTracks.value = next
+  }
   function toggleGroup(id: string): void { const next = new Set(expandedGroups.value); if (next.has(id)) next.delete(id); else next.add(id); expandedGroups.value = next }
   async function step(direction: -1 | 1): Promise<void> {
     clock.pause()
@@ -418,6 +567,7 @@ export const useReplayStore = defineStore('replay', () => {
     const next = clipped && clipped.end > clipped.start ? clipped : null
     if (selection.value?.start === next?.start && selection.value?.end === next?.end) return
     selection.value = next
+    ui.utilizationScope = next ? 'selection' : 'full'
     if (!selection.value) looping.value = false
     clock.setLoop(looping.value ? selection.value : null)
   }
@@ -479,7 +629,7 @@ export const useReplayStore = defineStore('replay', () => {
   }, { flush: 'sync' })
 
   function snapshot(): ProjectSnapshot {
-    return { version: 1, computeModel: { id: 'megakernel', version: '1' }, sources: sources.value.map(model => ({ filename: model.source.metadata.filename, fingerprint: model.source.metadata.fingerprint, parser: { id: 'perfetto', version: '1' }, offset: model.offset.toString() })), visibleSources: selectedSources.value.map(source => source.source.metadata.fingerprint), time: currentTime.value.toString(), speed: speed.value, viewport: { start: viewport.value.start.toString(), end: viewport.value.end.toString() }, selection: selection.value ? { start: selection.value.start.toString(), end: selection.value.end.toString() } : null, loop: looping.value, bookmarks: bookmarks.value.map(bookmark => ({ ...bookmark, time: bookmark.time.toString() })) }
+    return { version: 1, computeModel: { id: computeModelId.value, version: '1' }, sources: sources.value.map(model => ({ filename: model.source.metadata.filename, fingerprint: model.source.metadata.fingerprint, parser: { id: 'perfetto', version: '1' }, offset: model.offset.toString() })), visibleSources: selectedSources.value.map(source => source.source.metadata.fingerprint), time: currentTime.value.toString(), speed: speed.value, viewport: { start: viewport.value.start.toString(), end: viewport.value.end.toString() }, selection: selection.value ? { start: selection.value.start.toString(), end: selection.value.end.toString() } : null, loop: looping.value, bookmarks: bookmarks.value.map(bookmark => ({ ...bookmark, time: bookmark.time.toString() })) }
   }
   async function saveProject(): Promise<void> {
     if (!sources.value.length) return
@@ -490,18 +640,20 @@ export const useReplayStore = defineStore('replay', () => {
       notify('项目已保存，原始 trace 通过指纹关联')
     } catch (error) { notify(`保存项目失败：${error instanceof Error ? error.message : String(error)}`, 'error') }
   }
-  async function openProject(file: File): Promise<void> {
+  async function restoreProject(project: ProjectSnapshot): Promise<void> {
+    if (disposed) return
+    const generation = ++projectGeneration
     try {
-      if (file.size > projectFileLimit) throw new Error(projectFileLimitMessage)
-      const project = parseProject(await file.text())
+      if (!await setComputeModel(project.computeModel.id) || disposed || generation !== projectGeneration) return
       pendingProject.value = project
       if (project.sources.every(expected => sources.value.some(model => model.source.metadata.fingerprint === expected.fingerprint))) { applyPendingProject(); return }
       const missing = project.sources.filter(expected => !sources.value.some(source => source.source.metadata.fingerprint === expected.fingerprint))
       const files = await Promise.all(missing.map(expected => readHistoryFile(expected.fingerprint)))
+      if (disposed || generation !== projectGeneration) return
       if (files.every((file): file is File => file !== null)) {
         await importFiles(files)
       } else notify('项目已读取，请重新导入原始 trace 文件以验证指纹并恢复位置。')
-    } catch (error) { pendingProject.value = null; notify(error instanceof Error ? error.message : String(error), 'error') }
+    } catch (error) { if (!disposed && generation === projectGeneration) { pendingProject.value = null; notify(error instanceof Error ? error.message : String(error), 'error') } }
   }
   function applyPendingProject(): void {
     const project = pendingProject.value
@@ -533,5 +685,15 @@ export const useReplayStore = defineStore('replay', () => {
     notify('项目布局、书签、时钟偏移与播放位置已恢复')
   }
 
-  return { sources, timelineFocus, focusSource, computeModelId, sourceParserId, historyFiles, historyLoading, selectedSourceIds, selectedSources, displayedSources, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, toggleSource, selectAllSources, openHistory, removeHistory, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomToRange, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, playSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, openProject }
-})
+  return { supportsCu, computeModelLabel, totalTracks, activeTrackCount, trackLabel, setComputeModel, toggleTrack, setTracksExpanded, focusEventTrack, ui, sources, timelineFocus, focusSource, computeModelId, sourceParserId, historyFiles, historyLoading, selectedSourceIds, selectedSources, displayedSources, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, toggleSource, selectAllSources, openHistory, removeHistory, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomToRange, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, playSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, restoreProject }
+}
+
+export function createReplayStore(id: string, pinia?: Pinia) { return defineStore(`replay:${id}`, setupReplay)(pinia) }
+export type ReplayStore = ReturnType<typeof createReplayStore>
+const replayKey: InjectionKey<ReplayStore> = Symbol('replay-session')
+export function provideReplayStore(store: ReplayStore): void { provide(replayKey, store) }
+export function useReplayStore(): ReplayStore {
+  const store = inject(replayKey)
+  if (!store) throw new Error('缺少重放会话')
+  return store
+}
