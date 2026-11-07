@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { FocusScope } from 'reka-ui'
-import { Activity, ArrowDownToLine, Bookmark, ChevronRight, CircleHelp, Cpu, FolderOpen, Gauge, Grid2X2, Info, Layers3, LoaderCircle, Maximize2, Minimize2, Pause, Play, Plus, Repeat2, RotateCcw, Search, Settings2, ShieldCheck, SkipBack, SkipForward, Upload, Workflow, X } from 'lucide-vue-next'
+import { Activity, ArrowDownToLine, Bookmark, ChevronDown, ChevronRight, CircleHelp, Cpu, FolderOpen, Gauge, Grid2X2, Info, Layers3, LoaderCircle, Maximize2, Minimize2, Pause, Play, Plus, Repeat2, RotateCcw, Search, Settings2, ShieldCheck, SkipBack, SkipForward, Upload, Workflow, X } from 'lucide-vue-next'
 import Button from './components/ui/Button.vue'
 import CuGrid from './components/CuGrid.vue'
 import CuUtilization from './components/CuUtilization.vue'
@@ -11,6 +11,7 @@ import PlaybackSpeed from './components/PlaybackSpeed.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import WindowControls from './components/WindowControls.vue'
 import SessionFiles from './components/SessionFiles.vue'
+import ResourceSidebar from './components/ResourceSidebar.vue'
 import { duration, formatBytes, formatTime } from './core/time'
 import { operatorColor as eventColor } from './core/theme'
 import { useReplayStore } from './stores/replay'
@@ -36,6 +37,8 @@ const searchInput = ref<HTMLInputElement | null>(null)
 const workspace = ref<HTMLDivElement | null>(null)
 const modal = ref<'help' | 'settings' | null>(null)
 const settingsTab = ref<'appearance' | 'session'>('appearance')
+const replayInfoExpanded = ref(true)
+const bookmarksExpanded = ref(true)
 const dragDepth = ref(0)
 const storedRatio = Number(localStorage.getItem('visualstream.upperRatio') ?? 54)
 const upperRatio = ref(Number.isFinite(storedRatio) ? Math.max(0, Math.min(72, storedRatio)) : 54)
@@ -232,16 +235,27 @@ onBeforeUnmount(() => { keyboardNavigation.cancel(); document.removeEventListene
     </header>
 
     <div class="app-body">
-      <aside class="sidebar">
-        <div class="sidebar-title"><span>资源管理器</span><span class="small-caps">EXPLORER</span></div>
-        <div class="import-configuration"><label>计算模式<select v-model="store.computeModelId" aria-label="导入计算模式" :disabled="store.loading"><option value="megakernel">Megakernel</option></select></label><label>文件解析<select v-model="store.sourceParserId" aria-label="导入文件解析器" :disabled="store.loading"><option value="perfetto">Perfetto</option><option value="auto">自动识别</option></select></label></div>
-        <Button class="import-button" variant="outline" :disabled="store.loading || pickingFiles" @click="chooseTraceFiles()"><Plus :size="15" />导入 trace 文件<kbd>＋</kbd></Button>
-        <SessionFiles />
-        <div class="sidebar-rule" />
-        <div class="sidebar-section-heading"><span>重放信息</span><Activity :size="12" /></div><dl class="sidebar-info"><div><dt>计算模式</dt><dd>Megakernel</dd></div><div><dt>源解析器</dt><dd>Perfetto</dd></div><div><dt>资源层级</dt><dd>卡 / CU / Group</dd></div><div><dt>记录时长</dt><dd>{{ store.sources.length ? formatTime(duration(store.bounds)) : '—' }}</dd></div><div><dt>区间事件</dt><dd>{{ store.totalEvents.toLocaleString() }}</dd></div><div><dt>源文件大小</dt><dd>{{ formatBytes(totalBytes) }}</dd></div></dl>
-        <div v-if="store.sources.length > 1" class="alignment-note"><Info :size="14" /><span>相对起点对齐<br /><small>跨卡时钟尚未验证</small></span><button class="icon-button" aria-label="配置时钟对齐" @click="openSettings('session')"><Settings2 :size="12" /></button></div>
-        <div class="sidebar-rule" /><div class="sidebar-section-heading"><span>时间书签</span><button class="icon-button" title="添加书签 · B" aria-label="添加书签" :disabled="!store.sources.length" @click="store.addBookmark()"><Plus :size="13" /></button></div><div class="bookmark-list"><div v-for="bookmark in store.bookmarks" :key="bookmark.id"><button @click="store.seek(bookmark.time)"><Bookmark :size="12" /><span>{{ bookmark.label }}</span><small>{{ formatTime(bookmark.time, 2) }}</small></button><button class="bookmark-remove" aria-label="删除书签" @click="store.removeBookmark(bookmark.id)"><X :size="11" /></button></div><p v-if="!store.bookmarks.length">在重要时刻按 <kbd>B</kbd> 添加标记</p></div>
-      </aside>
+      <ResourceSidebar>
+        <div class="sidebar-import">
+          <div class="sidebar-title"><span>资源管理器</span><span class="small-caps">EXPLORER</span></div>
+          <div class="import-configuration"><label>计算模式<select v-model="store.computeModelId" aria-label="导入计算模式" :disabled="store.loading"><option value="megakernel">Megakernel</option></select></label><label>文件解析<select v-model="store.sourceParserId" aria-label="导入文件解析器" :disabled="store.loading"><option value="perfetto">Perfetto</option><option value="auto">自动识别</option></select></label></div>
+          <Button class="import-button" variant="outline" :disabled="store.loading || pickingFiles" @click="chooseTraceFiles()"><Plus :size="15" />导入 trace 文件<kbd>＋</kbd></Button>
+        </div>
+        <div class="sidebar-files"><SessionFiles /></div>
+        <div class="sidebar-utilities">
+          <section aria-label="重放信息" class="sidebar-panel" :class="{ 'is-collapsed': !replayInfoExpanded }">
+            <button class="sidebar-section-heading sidebar-section-toggle" :aria-expanded="replayInfoExpanded" aria-controls="replay-information" @click="replayInfoExpanded = !replayInfoExpanded"><span><ChevronDown v-if="replayInfoExpanded" :size="12" /><ChevronRight v-else :size="12" />重放信息</span><Activity :size="12" /></button>
+            <div v-show="replayInfoExpanded" id="replay-information" class="sidebar-panel-body">
+              <dl class="sidebar-info"><div><dt>计算模式</dt><dd>Megakernel</dd></div><div><dt>源解析器</dt><dd>Perfetto</dd></div><div><dt>资源层级</dt><dd>卡 / CU / Group</dd></div><div><dt>记录时长</dt><dd>{{ store.sources.length ? formatTime(duration(store.bounds)) : '—' }}</dd></div><div><dt>区间事件</dt><dd>{{ store.totalEvents.toLocaleString() }}</dd></div><div><dt>源文件大小</dt><dd>{{ formatBytes(totalBytes) }}</dd></div></dl>
+              <div v-if="store.sources.length > 1" class="alignment-note"><Info :size="14" /><span>相对起点对齐<br /><small>跨卡时钟尚未验证</small></span><button class="icon-button" aria-label="配置时钟对齐" @click="openSettings('session')"><Settings2 :size="12" /></button></div>
+            </div>
+          </section>
+          <section aria-label="时间书签" class="sidebar-panel" :class="{ 'is-collapsed': !bookmarksExpanded }">
+            <div class="sidebar-section-heading"><button class="sidebar-section-toggle" :aria-expanded="bookmarksExpanded" aria-controls="time-bookmarks" @click="bookmarksExpanded = !bookmarksExpanded"><ChevronDown v-if="bookmarksExpanded" :size="12" /><ChevronRight v-else :size="12" />时间书签</button><button class="icon-button" title="添加书签 · B" aria-label="添加书签" :disabled="!store.sources.length" @click="store.addBookmark()"><Plus :size="13" /></button></div>
+            <div v-show="bookmarksExpanded" id="time-bookmarks" class="sidebar-panel-body bookmark-list"><div v-for="bookmark in store.bookmarks" :key="bookmark.id"><button @click="store.seek(bookmark.time)"><Bookmark :size="12" /><span>{{ bookmark.label }}</span><small>{{ formatTime(bookmark.time, 2) }}</small></button><button class="bookmark-remove" aria-label="删除书签" @click="store.removeBookmark(bookmark.id)"><X :size="11" /></button></div><p v-if="!store.bookmarks.length">在重要时刻按 <kbd>B</kbd> 添加标记</p></div>
+          </section>
+        </div>
+      </ResourceSidebar>
 
       <main class="workspace">
         <div class="workspace-toolbar"><div class="workspace-breadcrumb"><span>重放</span><ChevronRight :size="13" /><strong :title="sourceTitle">{{ sourceTitle }}</strong></div><label class="search-box"><Search :size="14" /><input ref="searchInput" v-model="store.searchText" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="搜索任务或事件…" aria-label="搜索任务或事件" /><button v-if="store.searchText" class="icon-button" aria-label="清除搜索" @click="store.searchText = ''"><X :size="12" /></button><kbd v-else>Ctrl F</kbd></label></div>

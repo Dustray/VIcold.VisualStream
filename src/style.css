@@ -73,7 +73,7 @@ kbd { font-family: inherit; font-size: 11px; color: var(--vs-text-secondary, #8c
 .local-status { display: flex; gap: 5px; align-items: center; color: var(--vs-text-secondary, #7e9d92); font-size: 12px; } .header-divider,.toolbar-divider { width: 1px; height: 18px; background: var(--vs-surface-raised, #293345); margin: 0 3px; }
 .icon-button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 5px; color: var(--vs-text-secondary, #899bb5); padding: 0; } .icon-button:hover:not(:disabled) { background: var(--vs-surface-hover, #223046); color: var(--vs-text-primary, #d7e3f9); } .icon-button.selected { background: var(--vs-surface-selected, #243a5c); color: var(--vs-text-primary, #a9c4ff); }
 .app-body { display: flex; flex: 1; min-height: 0; }
-.sidebar { width: 228px; flex-shrink: 0; background: var(--vs-surface-panel, #10151e); border-right: 1px solid var(--vs-border, #242d3d); display: flex; flex-direction: column; padding: 18px 14px 0; overflow-y: auto; }
+.sidebar { width: 228px; flex-shrink: 0; background: var(--vs-surface-panel, #10151e); border-right: 1px solid var(--vs-border, #242d3d); display: flex; flex-direction: column; gap: 10px; padding: 14px 10px 10px; overflow: hidden; }
 .sidebar-title { display: flex; justify-content: space-between; align-items: center; font-weight: 600; padding: 0 3px; margin-bottom: 16px; } .small-caps { color: var(--vs-text-muted, #5c6e89); font-size: 10px; letter-spacing: 1.5px; font-weight: 500; }
 .import-button { width: 100%; justify-content: flex-start; font-size: 12px; height: 34px; border-color: var(--vs-border, #35415a); color: var(--vs-text-primary, #b4c6e6); background: var(--vs-surface-raised, #172133); margin-bottom: 19px; } .import-button kbd { margin-left: auto; color: var(--vs-text-secondary, #7185aa); border: none; }
 .sidebar-section-heading { display: flex; justify-content: space-between; align-items: center; color: var(--vs-text-secondary, #7e8ca2); font-size: 11px; letter-spacing: .5px; margin: 3px 2px 10px; } .sidebar-section-heading > span { display: flex; align-items: center; gap: 4px; }
@@ -82,7 +82,35 @@ kbd { font-family: inherit; font-size: 11px; color: var(--vs-text-secondary, #8c
 .file-main { display: flex; width: 100%; align-items: flex-start; gap: 8px; text-align: left; padding: 0 10px 0 0; } .file-main > svg { color: var(--vs-text-secondary, #88a6d6); margin-top: 2px; } .file-main > span { min-width: 0; flex: 1; }
 .file-main strong { display: block; font-size: 12px; font-weight: 500; color: var(--vs-text-primary, #b3c4e0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .file-main small { display: flex; gap: 6px; color: var(--vs-text-secondary, #8097b7); font-size: 12px; margin-top: 4px; }
 .sidebar-section-toggle { width: 100%; padding: 5px 0; text-align: left; }
+.sidebar-section-heading > .sidebar-section-toggle { display: flex; align-items: center; gap: 4px; flex: 1; width: auto; min-width: 0; }
 .sidebar-section-toggle:hover { color: var(--vs-text-primary, #b3c4e0); }
+.sidebar-import { flex-shrink: 0; }
+.sidebar-import .sidebar-title { margin-bottom: 12px; }
+.sidebar-import .import-button { margin-bottom: 0; }
+.sidebar-files { display: flex; flex: 1; flex-direction: column; min-height: 200px; gap: 8px; }
+.sidebar-utilities { display: flex; flex: 0 1 auto; flex-direction: column; gap: 8px; min-height: 80px; max-height: min(330px, 38%); margin-top: auto; }
+.sidebar-panel { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 36px; overflow: hidden; border: 1px solid var(--vs-border, #293850); border-radius: 6px; background: var(--vs-surface-panel, #10151e); }
+.sidebar-panel > .sidebar-section-heading { height: 34px; flex-shrink: 0; margin: 0; padding: 0 8px; border-bottom: 1px solid var(--vs-border, #293850); background: var(--vs-surface-raised, #17202e); font-size: 12px; font-weight: 600; letter-spacing: 0; }
+.sidebar-panel > .sidebar-section-heading > .sidebar-section-toggle { align-self: stretch; padding: 0; }
+.sidebar-panel.is-collapsed { flex: 0 0 auto; min-height: 36px; }
+.sidebar-panel.is-collapsed > .sidebar-section-heading { border-bottom-color: transparent; }
+.sidebar-panel-body { min-height: 0; overflow: auto; padding: 8px; overscroll-behavior: none; }
+.sidebar-files > .session-files { flex: 1; min-height: 140px; border-color: var(--vs-border-strong, #35415a); }
+.session-files > .sidebar-section-heading { color: var(--vs-text-primary, #c7d2e3); background: var(--vs-surface-selected, #18243a); box-shadow: inset 2px 0 var(--vs-accent, #9abaff); }
+.session-files .count-badge { color: var(--vs-accent, #9abaff); background: var(--vs-surface-panel, #10151e); }
+.sidebar-files > .session-files.is-collapsed { flex: 0 0 auto; min-height: 36px; }
+.sidebar-files > .history-files { max-height: min(200px, 34%); }
+.sidebar-files > .history-files.is-primary { flex: 1; max-height: none; }
+.sidebar-files > .history-files.is-collapsed { flex: 0 0 auto; }
+.session-file-content { display: flex; flex: 1; flex-direction: column; overflow: hidden; padding: 0; }
+.sidebar-panel .file-selection-actions { flex-shrink: 0; margin: 0; padding: 6px 8px; gap: 8px; border-bottom: 1px solid var(--vs-border, #293850); }
+.sidebar-panel .file-list { flex: 1; min-height: 0; margin: 0; padding: 4px; overflow: auto; overscroll-behavior: none; }
+.sidebar-panel .file-list > .sidebar-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; padding: 16px 4px; }
+.sidebar-panel .sidebar-empty svg { margin: 0 0 8px; }
+.sidebar-panel .history-file-list { max-height: none; margin: 0; padding: 4px; }
+.sidebar-panel .bookmark-list { margin: 0; }
+.sidebar-panel .sidebar-info { margin: 0; }
+.sidebar-panel .sidebar-info > div:first-child { margin-top: 0; }
 .file-selection-actions { display: flex; align-items: center; gap: 10px; margin: 0 2px 8px; font-size: 11px; color: var(--vs-text-secondary, #8097b7); }
 .file-selection-actions button { padding: 2px 0; color: var(--vs-accent, #9abaff); }
 .file-selection-actions > span { margin-left: auto; font-size: 11px; }

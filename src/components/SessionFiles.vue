@@ -11,12 +11,12 @@ const inSession = (fingerprint: string) => store.sources.some(source => source.s
 </script>
 
 <template>
-  <section aria-label="当前会话" class="session-files">
+  <section aria-label="当前会话" class="sidebar-panel session-files" :class="{ 'is-collapsed': !sessionExpanded }">
     <button class="sidebar-section-heading sidebar-section-toggle" :aria-expanded="sessionExpanded" aria-controls="session-file-list" @click="sessionExpanded = !sessionExpanded">
       <span><ChevronDown v-if="sessionExpanded" :size="12" /><ChevronRight v-else :size="12" />当前会话</span><span class="count-badge">{{ store.selectedSources.length }} / {{ store.sources.length }}</span>
     </button>
-    <div v-show="sessionExpanded" id="session-file-list">
-      <div v-if="store.sources.length" class="file-selection-actions"><button @click="store.selectAllSources(true)">全选</button><button @click="store.selectAllSources(false)">清空选择</button><span>勾选文件以显示</span></div>
+    <div v-show="sessionExpanded" id="session-file-list" class="sidebar-panel-body session-file-content">
+      <div v-if="store.sources.length" class="file-selection-actions"><button @click="store.selectAllSources(true)">全选</button><button @click="store.selectAllSources(false)">清空选择</button><span>勾选显示</span></div>
       <div class="file-list">
         <div v-for="source in store.sources" :key="source.source.metadata.id" class="file-entry" :class="{ selected: store.selectedSourceIds.has(source.source.metadata.id) }" @click="store.focusSource(source.source.metadata.id)">
           <input class="file-checkbox" type="checkbox" :aria-label="source.source.metadata.filename" :checked="store.selectedSourceIds.has(source.source.metadata.id)" @click.stop @change="store.toggleSource(source.source.metadata.id)" />
@@ -30,11 +30,11 @@ const inSession = (fingerprint: string) => store.sources.some(source => source.s
       </div>
     </div>
   </section>
-  <section aria-label="历史文件" class="history-files">
+  <section aria-label="历史文件" class="sidebar-panel history-files" :class="{ 'is-collapsed': !historyExpanded, 'is-primary': !sessionExpanded }">
     <button class="sidebar-section-heading sidebar-section-toggle" :aria-expanded="historyExpanded" aria-controls="history-file-list" @click="historyExpanded = !historyExpanded">
       <span><ChevronDown v-if="historyExpanded" :size="12" /><ChevronRight v-else :size="12" />历史文件</span><span class="count-badge">{{ store.historyFiles.length }}</span>
     </button>
-    <div v-show="historyExpanded" id="history-file-list" class="history-file-list">
+    <div v-show="historyExpanded" id="history-file-list" class="sidebar-panel-body history-file-list">
       <div v-for="file in store.historyFiles" :key="file.fingerprint" class="history-entry">
         <button class="history-file" :title="file.filename" :aria-label="`打开历史文件 ${file.filename}`" :disabled="store.loading" @click="store.openHistory(file.fingerprint)"><History :size="14" /><span><strong>{{ file.filename }}</strong><small>{{ formatBytes(file.bytes) }} · {{ inSession(file.fingerprint) ? '当前会话中' : '添加到当前会话' }}</small></span></button>
         <button class="file-remove" :aria-label="`从历史记录中移除 ${file.filename}`" @click="store.removeHistory(file.fingerprint)"><X :size="12" /></button>
