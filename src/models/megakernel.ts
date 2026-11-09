@@ -73,10 +73,11 @@ class MegakernelDataSource implements ReplayDataSource {
     return { events: page.events.map(event => this.mapEvent(event)).filter((event): event is ReplayEvent => event !== null), truncated: page.truncated }
   }
   async density(query: EventQuery & { buckets: number }) {
+    const shift = this.source.metadata.start - this.offset
     const bins = await this.source.density({ ...this.rawQuery(query), buckets: query.buckets })
     return bins.flatMap(bin => {
       const resource = this.trackMap.get(bin.trackId)
-      return resource ? [{ ...bin, ...resource, sourceId: this.source.metadata.id, start: bin.start - this.source.metadata.start + this.offset, end: bin.end - this.source.metadata.start + this.offset }] : []
+      return resource ? [{ ...bin, ...resource, sourceId: this.source.metadata.id, start: bin.start - shift, end: bin.end - shift, ...(bin.event ? { event: { ...bin.event, start: bin.event.start - shift, end: bin.event.end - shift } } : {}) }] : []
     })
   }
   statistics(query: EventQuery) { return this.source.statistics(this.rawQuery(query)) }

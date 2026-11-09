@@ -29,7 +29,7 @@ class DefaultDataSource implements ReplayDataSource {
   async density(query: DensityQuery) {
     const shift = this.source.metadata.start - this.offset
     const bins = await this.source.density({ ...this.rawQuery(query, shift), buckets: query.buckets, byDepth: true })
-    return bins.map(bin => ({ ...bin, sourceId: this.source.metadata.id, start: bin.start - shift, end: bin.end - shift }))
+    return bins.map(bin => ({ ...bin, sourceId: this.source.metadata.id, start: bin.start - shift, end: bin.end - shift, ...(bin.event ? { event: { ...bin.event, start: bin.event.start - shift, end: bin.event.end - shift } } : {}) }))
   }
   statistics(query: EventQuery) { return this.source.statistics(this.rawQuery(query, this.source.metadata.start - this.offset)) }
   async cuStatistics(): Promise<never> { throw new Error('默认计算模式不提供 CU 利用率') }

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MegakernelModel } from '../../src/models/megakernel'
+import { DefaultModel } from '../../src/models/default'
 import { parseProject } from '../../src/core/project'
 import { fitRange, parseMilliseconds, timeBuckets, unionDuration } from '../../src/core/time'
-import type { ParsedTraceSource, RawSpan, RawTrack, TimeRange, TrackGroup } from '../../src/core/types'
+import type { DensityBin, ParsedTraceSource, RawSpan, RawTrack, TimeRange, TrackGroup } from '../../src/core/types'
 
 function source(id = 'source-a'): ParsedTraceSource {
   const tracks: RawTrack[] = [{ id: 0, parentId: null, name: 'block_0' }, { id: 1, parentId: 0, name: 'group_0' }, { id: 2, parentId: 1, name: 'group_0' }, { id: 3, parentId: null, name: 'block_1' }, { id: 4, parentId: 3, name: 'group_0' }]
@@ -11,6 +12,20 @@ function source(id = 'source-a'): ParsedTraceSource {
 }
 
 describe('Megakernel compute interpretation', () => {
+  it.each(['default', 'megakernel'])('normalizes exact density event bounds with the query offset snapshot in %s mode', async mode => {
+    const raw = source()
+    let finish!: (value: DensityBin[]) => void
+    raw.density = () => new Promise(resolve => { finish = resolve })
+    const model = await (mode === 'default' ? new DefaultModel() : new MegakernelModel()).build(raw)
+    model.offset = 500n
+    const pending = model.density({ start: 1000n, end: 1500n, buckets: 5 })
+    model.offset = -100n
+    const event = { id: 0, start: 1100n, end: 3900n }
+    finish([{ trackId: 2, start: 1500n, end: 2000n, count: 1, name: 'long', event }])
+    expect(await pending).toMatchObject([{ start: 1000n, end: 1500n, event: { id: 0, start: 600n, end: 3400n } }])
+    expect(event).toEqual({ id: 0, start: 1100n, end: 3900n })
+  })
+
   it('is independent from file encoding and keeps group identity local to each CU', async () => {
     const raw = source()
     const model = await new MegakernelModel().build(raw)

@@ -37,18 +37,22 @@ export class TimelineGeometryCache {
     const bins: TimelineSpan<ReplayDensity>[] = []
     for (const track of tracks) {
       const segments = track.segments ?? [{ data: track, range: undefined }]
-      const fragments = track.segments ? new Map<number, TimelineSpan<ReplayEvent>>() : null
+      const eventIds = new Set<number>()
+      const densityEvents = new Map<number, ReplayDensity>()
       for (const { data, range } of segments) {
         for (const event of data.events) {
-          if ((eventDepth !== undefined && event.depth !== eventDepth) || (range && (event.start >= range.end || event.end <= range.start))) continue
-          const span = project(event, range)
-          const previous = fragments?.get(event.id)
-          if (previous && previous.end >= span.start) previous.end = Math.max(previous.end, span.end)
-          else { events.push(span); fragments?.set(event.id, span) }
+          if (eventIds.has(event.id) || (eventDepth !== undefined && event.depth !== eventDepth) || (range && (event.start >= range.end || event.end <= range.start))) continue
+          eventIds.add(event.id)
+          events.push(project(event))
         }
         for (const bin of data.bins) {
-          if ((eventDepth === undefined || (bin.depth ?? 0) === eventDepth) && (!range || bin.start < range.end && bin.end > range.start)) bins.push(project(bin, range))
+          if ((eventDepth !== undefined && (bin.depth ?? 0) !== eventDepth) || (range && (bin.start >= range.end || bin.end <= range.start))) continue
+          if (bin.count === 1 && bin.event) densityEvents.set(bin.event.id, bin)
+          else bins.push(project(bin, range))
         }
+      }
+      for (const [eventId, bin] of densityEvents) {
+        if (!eventIds.has(eventId)) bins.push(project({ ...bin, start: bin.event!.start, end: bin.event!.end }))
       }
     }
     events.sort((left, right) => {

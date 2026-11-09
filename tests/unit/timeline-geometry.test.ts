@@ -12,7 +12,7 @@ function track(events: ReplayEvent[], bins: ReplayDensity[] = []): TimelineTrack
 }
 
 describe('prepared timeline geometry', () => {
-  it('joins adjoining cached fragments of an event without duplicating its label or changing its timestamps', () => {
+  it('draws a known event once across adjoining and separated cache regions using its original bounds', () => {
     const cache = new TimelineGeometryCache(() => '#123456ff')
     const original = event(1, 10n, 290n)
     const input: TimelineTrackData = { events: [], bins: [], dense: false, segments: [
@@ -21,7 +21,7 @@ describe('prepared timeline geometry', () => {
       { range: { start: 250n, end: 300n }, data: track([{ ...original }]) },
     ] }
     const geometry = cache.read('row', [input], 0n)
-    expect(geometry.events.map(span => [span.start, span.end])).toEqual([[10, 200], [250, 290]])
+    expect(geometry.events.map(span => [span.start, span.end])).toEqual([[10, 290]])
     expect(geometry.events[0]!.item).toBe(original)
     expect(original).toMatchObject({ start: 10n, end: 290n })
   })
@@ -36,11 +36,36 @@ describe('prepared timeline geometry', () => {
     ] }
     const geometry = cache.read('row', [input], 0n)
     expect(geometry.events).toHaveLength(1)
-    expect(geometry.events[0]).toMatchObject({ start: 50, end: 90 })
+    expect(geometry.events[0]).toMatchObject({ start: 40, end: 90 })
     expect(geometry.events[0]!.item).toBe(fine)
     expect(fine.start).toBe(40n)
     expect(geometry.bins.map(span => [span.start, span.end])).toEqual([[0, 50], [200, 300]])
     expect(cache.read('row', [input], 20n)).toBe(geometry)
+  })
+  it('deduplicates exact density events across zoom levels without joining distinct same-name events', () => {
+    const cache = new TimelineGeometryCache(name => name)
+    const bin: ReplayDensity = { sourceId: 'source', trackId: 1, start: 0n, end: 100n, count: 1, name: 'PyTorch Profiler (0)', event: { id: 0, start: 0n, end: 300n } }
+    const next: ReplayDensity = { ...bin, start: 310n, end: 400n, event: { id: 1, start: 310n, end: 400n } }
+    const input: TimelineTrackData = { events: [], bins: [], dense: true, segments: [
+      { range: { start: 0n, end: 100n }, data: track([], [bin]) },
+      { range: { start: 100n, end: 200n }, data: track([], [{ ...bin, start: 100n, end: 200n }]) },
+      { range: { start: 200n, end: 400n }, data: track([], [{ ...bin, start: 200n, end: 300n }, next]) },
+    ] }
+    expect(cache.read('row', [input], 0n).bins.map(span => [span.start, span.end])).toEqual([[0, 300], [310, 400]])
+    expect(bin).toMatchObject({ start: 0n, end: 100n })
+  })
+  it('replaces density fragments of a known raw event with its one complete interval', () => {
+    const cache = new TimelineGeometryCache(name => name)
+    const original = event(1, 0n, 300n)
+    const bin: ReplayDensity = { sourceId: 'source', trackId: 1, start: 0n, end: 300n, count: 1, name: original.name, event: { id: 1, start: 0n, end: 300n } }
+    const input: TimelineTrackData = { events: [], bins: [], dense: true, segments: [
+      { range: { start: 0n, end: 100n }, data: track([], [bin]) },
+      { range: { start: 100n, end: 200n }, data: track([original]) },
+      { range: { start: 200n, end: 300n }, data: track([], [bin]) },
+    ] }
+    const geometry = cache.read('row', [input], 0n)
+    expect(geometry.events).toMatchObject([{ start: 0, end: 300, item: original }])
+    expect(geometry.bins).toEqual([])
   })
   it('paints shorter overlapping events last across tracks without modifying query results', () => {
     const paint = vi.fn(() => '#123456ff')

@@ -27,7 +27,7 @@ describe('colored density aggregation', () => {
       expect(bins).toEqual([
         { trackId: 1, start: origin, end: origin + 42n, count: 2, name: 'TASK_RMS_NORM_12', representativeDuration: 40n },
         { trackId: 1, start: origin + 50n, end: origin + 100n, count: 2, name: 'TASK_RMS_NORM_99', representativeDuration: 45n },
-        { trackId: 2, start: origin + 60n, end: origin + 100n, count: 1, name: 'OPEN_1', representativeDuration: 40n },
+        { trackId: 2, start: origin + 60n, end: origin + 100n, count: 1, name: 'OPEN_1', representativeDuration: 40n, event: { id: 5, start: origin + 60n, end: origin + 110n } },
       ])
       expect(eventColor(bins[0]!.name!)).toBe(eventColor(bins[1]!.name!))
       expect(await queryDensity(engine, { start: origin, end: origin + 100n, buckets: 2, trackIds: [2] }, origin + 110n)).toEqual([bins[2]])
@@ -54,6 +54,24 @@ describe('colored density aggregation', () => {
       database.exec("CREATE TABLE slice (id INTEGER, track_id INTEGER, ts INTEGER, dur INTEGER, name TEXT); INSERT INTO slice VALUES (9, 1, 5, 90, 'same duration, later id'), (2, 1, 0, 90, '算子 👾'), (1, 1, -90, 100, 'long before clipping'), (3, 1, 15, 60, 'shorter')")
       const engine = { query: async (sql: string) => { const statement = database.prepare(sql); statement.setReadBigInts(true); return statement.all() as SqlRow[] } }
       expect(await queryDensity(engine, { start: 0n, end: 100n, buckets: 1 }, 100n)).toEqual([{ trackId: 1, start: 0n, end: 95n, count: 4, name: '算子 👾', representativeDuration: 90n }])
+    } finally { database.close() }
+  })
+
+  it.each([0n, 9007199254740993n])('retains exact single-event identity and full bounds across overlapping query ranges at %s', async origin => {
+    const database = new DatabaseSync(':memory:')
+    try {
+      database.exec('CREATE TABLE slice (id INTEGER, track_id INTEGER, ts INTEGER, dur INTEGER, name TEXT)')
+      const insert = database.prepare('INSERT INTO slice VALUES (?, ?, ?, ?, ?)')
+      insert.run(0, 1, origin, 100n, 'PyTorch Profiler (0)')
+      insert.run(1, 1, origin + 110n, 90n, 'PyTorch Profiler (0)')
+      const engine = { query: async (sql: string) => { const statement = database.prepare(sql); statement.setReadBigInts(true); return statement.all() as SqlRow[] } }
+      for (const [start, end] of [[10n, 40n], [35n, 65n], [80n, 100n]]) {
+        const bins = await queryDensity(engine, { start: origin + start!, end: origin + end!, buckets: 5 }, origin + 200n)
+        expect(bins).toHaveLength(1)
+        expect(bins[0]).toMatchObject({ start: origin + start!, end: origin + end!, count: 1, event: { id: 0, start: origin, end: origin + 100n } })
+      }
+      const later = await queryDensity(engine, { start: origin + 120n, end: origin + 160n, buckets: 5 }, origin + 200n)
+      expect(later[0]?.event).toEqual({ id: 1, start: origin + 110n, end: origin + 200n })
     } finally { database.close() }
   })
 

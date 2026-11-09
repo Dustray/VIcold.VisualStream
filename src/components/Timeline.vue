@@ -8,7 +8,8 @@ import { useReplayStore } from '../stores/replay'
 import type { TimelineRequest, TimelineTrackData } from '../engine/timeline-cache'
 import { ScrollMotion } from '../engine/scroll-motion'
 import { fitTimelineLabel } from '../engine/timeline-label'
-import { TimelineGeometryCache, type TimelineSpan } from '../engine/timeline-geometry'
+import { TimelineGeometryCache } from '../engine/timeline-geometry'
+import { TimelineDensityCache } from '../engine/timeline-density'
 import { TimelineLayout } from '../engine/timeline-layout'
 
 const store = useReplayStore()
@@ -81,6 +82,7 @@ function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number,
   canvas.fillStyle = ink; canvas.textAlign = 'center'; canvas.fillText(label, (left + right) / 2, centerY); canvas.textAlign = alignment
 }
 const cache = store.timelineCache
+const densityCache = new TimelineDensityCache()
 const geometryCache = new TimelineGeometryCache(name => `${eventColor(name)}${operatorOpacity()}`, name => store.supportsCu ? name.replace('TASK_', '') : name)
 const overviewTracks = computed(() => {
   const tracks = new Map<string, ReplayDensity[]>()
@@ -271,45 +273,31 @@ function draw(): void {
       const geometry = geometryCache.read(row.id, tracks, viewport.start, row.eventDepth)
       const start = Number(viewport.start - geometry.origin)
       const end = Number(viewport.end - geometry.origin)
-      const merged = new Map<number, TimelineSpan<ReplayDensity>>()
-      for (const span of geometry.bins) {
+      const bins = densityCache.read(geometry, 1 / scale, { start, end })
+      let eventIndex = 0
+      let binIndex = 0
+      while (eventIndex < geometry.events.length || binIndex < bins.length) {
+        const eventSpan = geometry.events[eventIndex]
+        const binSpan = bins[binIndex]
+        const span = eventSpan && (!binSpan || eventSpan.end - eventSpan.start >= binSpan.end - binSpan.start) ? geometry.events[eventIndex++]! : bins[binIndex++]!
         if (span.start >= end || span.end <= start) continue
-        const bin = span.item
-        const bucket = Math.floor((span.start - start) * scale / 3)
-        const existing = merged.get(bucket)
-        if (existing) {
-          existing.item.count += bin.count
-          if ((bin.representativeDuration ?? 0n) > (existing.item.representativeDuration ?? 0n)) {
-            existing.item.name = bin.name
-            existing.item.representativeDuration = bin.representativeDuration
-            existing.paint = span.paint
-            existing.label = span.label
-          }
-          if (bin.end > existing.item.end) { existing.item.end = bin.end; existing.end = span.end }
+        const left = Math.max(gutter, gutter + (span.start - start) * scale)
+        const right = Math.min(width - 13, gutter + (span.end - start) * scale)
+        if (right < gutter || left > width) continue
+        if ('count' in span.item) {
+          canvas.fillStyle = selected ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
+          canvas.fillRect(left, top + inset, Math.max(2, right - left - 0.5), rowHeight - inset * 2)
+          if (span.label) drawLabel(canvas, span.label, left, right - 0.5, centerY, ink)
+          hits.push({ bin: span.item, left, right: Math.max(left + 2, right), top: top + (compact ? 0 : 4), bottom: top + rowHeight - (compact ? 0 : 3) })
+        } else {
+          const event = span.item
+          const chosen = event.id === selectedEvent?.id && event.sourceId === selectedEvent.sourceId
+          canvas.fillStyle = chosen ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
+          canvas.beginPath(); canvas.roundRect(left, top + inset, Math.max(1, right - left - 1), rowHeight - inset * 2, compact ? 0 : 2); canvas.fill()
+          if (chosen) { canvas.strokeStyle = highlight; canvas.stroke() }
+          drawLabel(canvas, span.label, left, right - 1, centerY, ink)
+          hits.push({ event, left, right: Math.max(left + 2, right), top: top + (compact ? 0 : 4), bottom: top + rowHeight - (compact ? 0 : 3) })
         }
-        else merged.set(bucket, { ...span, item: { ...bin } })
-      }
-      for (const span of merged.values()) {
-        const left = Math.max(gutter, gutter + (span.start - start) * scale)
-        const right = Math.min(width - 13, gutter + (span.end - start) * scale)
-        if (right < gutter || left > width) continue
-        canvas.fillStyle = selected ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
-        canvas.fillRect(left, top + inset, Math.max(2, right - left - 0.5), rowHeight - inset * 2)
-        if (span.label) drawLabel(canvas, span.label, left, right - 0.5, centerY, ink)
-        hits.push({ bin: span.item, left, right: Math.max(left + 2, right), top: top + (compact ? 0 : 4), bottom: top + rowHeight - (compact ? 0 : 3) })
-      }
-      for (const span of geometry.events) {
-        if (span.start >= end || span.end <= start) continue
-        const event = span.item
-        const left = Math.max(gutter, gutter + (span.start - start) * scale)
-        const right = Math.min(width - 13, gutter + (span.end - start) * scale)
-        if (right < gutter || left > width) continue
-        const chosen = event.id === selectedEvent?.id && event.sourceId === selectedEvent.sourceId
-        canvas.fillStyle = chosen ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
-        canvas.beginPath(); canvas.roundRect(left, top + inset, Math.max(1, right - left - 1), rowHeight - inset * 2, compact ? 0 : 2); canvas.fill()
-        if (chosen) { canvas.strokeStyle = highlight; canvas.stroke() }
-        drawLabel(canvas, span.label, left, right - 1, centerY, ink)
-        hits.push({ event, left, right: Math.max(left + 2, right), top: top + (compact ? 0 : 4), bottom: top + rowHeight - (compact ? 0 : 3) })
       }
       canvas.restore()
     }
