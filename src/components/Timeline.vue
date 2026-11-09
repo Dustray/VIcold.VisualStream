@@ -5,10 +5,11 @@ import { duration, formatTime } from '../core/time'
 import { operatorColor as eventColor, operatorOpacity, resolvedTheme, themeColor } from '../core/theme'
 import type { ReplayDensity, ReplayEvent, TimelineRow, TimeRange } from '../core/types'
 import { useReplayStore } from '../stores/replay'
-import { TimelineCache, type TimelineRequest, type TimelineTrackData } from '../engine/timeline-cache'
+import type { TimelineRequest, TimelineTrackData } from '../engine/timeline-cache'
 import { ScrollMotion } from '../engine/scroll-motion'
 import { fitTimelineLabel } from '../engine/timeline-label'
 import { TimelineGeometryCache, type TimelineSpan } from '../engine/timeline-geometry'
+import { TimelineLayout } from '../engine/timeline-layout'
 
 const store = useReplayStore()
 const viewportElement = ref<HTMLDivElement | null>(null)
@@ -37,7 +38,7 @@ const overviewTooltip = computed(() => {
 })
 const gutter = 170
 const ruler = 31
-const rowHeight = 29
+const layout = computed(() => new TimelineLayout(store.rows, !store.supportsCu))
 let width = 900
 let height = 280
 let observer: ResizeObserver | null = null
@@ -50,6 +51,7 @@ let dataScrollTop = -1
 let overlayFrame = 0
 let overviewBase: HTMLCanvasElement | null = null
 let overviewKey: unknown[] = []
+let prefetchTimer: ReturnType<typeof setTimeout> | null = null
 let queryFrame = 0
 let queryRunning = false
 let queryRequested = false
@@ -63,7 +65,7 @@ const verticalMotion = new ScrollMotion(
 )
 const labelWidths = new Map<string, number>()
 function stopMotion(): void { store.stopPan(); verticalMotion.cancel() }
-function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number, right: number, top: number, ink: string): void {
+function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number, right: number, centerY: number, ink: string): void {
   if (right - left < 17) return
   const label = fitTimelineLabel(name, right - left - 8, text => {
     let width = labelWidths.get(text)
@@ -75,9 +77,10 @@ function drawLabel(canvas: CanvasRenderingContext2D, name: string, left: number,
     return width
   })
   if (!label) return
-  canvas.fillStyle = ink; canvas.fillText(label, left + 4, top + 14)
+  const alignment = canvas.textAlign
+  canvas.fillStyle = ink; canvas.textAlign = 'center'; canvas.fillText(label, (left + right) / 2, centerY); canvas.textAlign = alignment
 }
-const cache = new TimelineCache()
+const cache = store.timelineCache
 const geometryCache = new TimelineGeometryCache(name => `${eventColor(name)}${operatorOpacity()}`, name => store.supportsCu ? name.replace('TASK_', '') : name)
 const overviewTracks = computed(() => {
   const tracks = new Map<string, ReplayDensity[]>()
@@ -87,7 +90,7 @@ const overviewTracks = computed(() => {
     bins.push(bin)
     tracks.set(key, bins)
   }
-  return tracks
+  return new Map([...tracks].map(([key, bins]) => [key, { events: [], bins, dense: true } as TimelineTrackData]))
 })
 let hits: { event?: ReplayEvent; bin?: ReplayDensity; left: number; right: number; top: number; bottom: number }[] = []
 let gesture: { kind: 'pan' | 'scrub' | 'select'; x: number; y: number; origin: bigint; viewport: TimeRange; event: ReplayEvent | null; resume: boolean; moved: boolean } | null = null
@@ -109,20 +112,22 @@ function toTime(horizontal: number): bigint { return store.viewport.start + BigI
 function position(event: PointerEvent | WheelEvent): { x: number; y: number } { const bounds = overlay.value!.getBoundingClientRect(); return { x: event.clientX - bounds.left, y: event.clientY - bounds.top } }
 function rememberPointer(horizontal: number): void { store.setZoomPointer(horizontal < gutter || horizontal > width - 13 ? null : (horizontal - gutter) / plotWidth()) }
 function pointerLeave(): void { tooltip.value = null; store.setZoomPointer(null) }
-function visibleRows(padding = 0): TimelineRow[] { const first = Math.max(0, Math.floor(scrollTop.value / rowHeight) - 1 - padding); return store.rows.slice(first, Math.min(store.rows.length, Math.ceil((scrollTop.value + height - ruler) / rowHeight) + 2 + padding)) }
+function firstVisibleRow(padding = 0): number { return Math.max(0, layout.value.indexAt(scrollTop.value) - 1 - padding) }
+function visibleRows(padding = 0): TimelineRow[] { return store.rows.slice(firstVisibleRow(padding), Math.min(store.rows.length, layout.value.indexAt(scrollTop.value + height - ruler) + 3 + padding)) }
 function scheduleBackground(): void { backgroundDirty = true; if (!drawFrame) drawFrame = requestAnimationFrame(draw); scheduleOverlay() }
 function scheduleOverlay(): void { if (!overlayFrame) overlayFrame = requestAnimationFrame(drawOverlay) }
 function invalidate(): void {
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null }
   updateData()
   scheduleBackground()
   queryRequested = true
   if (!queryFrame) queryFrame = requestAnimationFrame(() => { queryFrame = 0; void query() })
 }
 
-function requests(timePadding = 0n, rowPadding = 0): TimelineRequest[] {
+function requests(timePadding = 0n, rowPadding = 0, viewport = store.viewport): TimelineRequest[] {
   const visible = visibleRows(rowPadding).filter(row => row.trackIds.length)
-  const range = { start: store.viewport.start - timePadding > store.bounds.start ? store.viewport.start - timePadding : store.bounds.start, end: store.viewport.end + timePadding < store.bounds.end ? store.viewport.end + timePadding : store.bounds.end }
-  const resolution = Number(duration(store.viewport)) / plotWidth()
+  const range = { start: viewport.start - timePadding > store.bounds.start ? viewport.start - timePadding : store.bounds.start, end: viewport.end + timePadding < store.bounds.end ? viewport.end + timePadding : store.bounds.end }
+  const resolution = Number(duration(viewport)) / plotWidth()
   return store.displayedSources.map(source => ({ source, range, resolution, density: resolution > 18000, trackIds: [...new Set(visible.filter(row => row.sourceId === source.source.metadata.id).flatMap(row => row.trackIds))] })).filter(request => request.trackIds.length)
 }
 
@@ -134,9 +139,11 @@ function updateData(): void {
     missing ||= !cache.covers(request)
     for (const trackId of request.trackIds) {
       const key = `${request.source.source.metadata.id}:${trackId}`
-      const track = cache.read(request, trackId) ?? { events: [], bins: overviewTracks.value.get(key) ?? [], dense: true }
+      const track = cache.read(request, trackId, overviewTracks.value.get(key)) ?? { events: [], bins: [], dense: true }
       next.set(key, track)
-      anyDensity ||= track.dense
+      anyDensity ||= track.segments
+        ? track.segments.some(segment => segment.data.dense && segment.range.start < request.range.end && segment.range.end > request.range.start)
+        : track.dense
     }
   }
   data = next
@@ -146,30 +153,42 @@ function updateData(): void {
   querying.value = missing && !store.loading
 }
 
-async function query(): Promise<void> {
+function prefetch(): void {
+  if (prefetchTimer) clearTimeout(prefetchTimer)
+  prefetchTimer = setTimeout(() => {
+    prefetchTimer = null
+    if (!disposed && !store.zooming && !store.panningViewport && !panning.value && !verticalMotion.active && !overviewGesture) void query(true)
+  }, 150)
+}
+
+async function query(buffered = false): Promise<void> {
   if (queryRunning || disposed) return
   queryRequested = false
   if (store.loading) return
-  const rowCount = Math.max(1, Math.ceil((height - ruler) / rowHeight))
-  const warm = requests(duration(store.viewport) / 4n, Math.ceil(rowCount / 3))
-  if (warm.every(request => cache.covers(request))) { updateData(); scheduleBackground(); return }
-  const pending = requests(duration(store.viewport), rowCount).filter(request => {
-    const required = warm.find(candidate => candidate.source === request.source)
-    return !required || !cache.covers(required)
-  })
+  const rowCount = Math.max(1, visibleRows().length)
+  const destination = store.zoomDestination()
+  const viewport = !buffered && destination && duration(destination) < duration(store.viewport) ? destination : store.viewport
+  const pending = (buffered ? requests(duration(viewport) / 2n, Math.ceil(rowCount / 2), viewport) : requests(duration(viewport) / 8n, 0, viewport)).filter(request => !cache.covers(request))
+  if (!pending.length) {
+    updateData(); scheduleBackground()
+    if (!buffered) prefetch()
+    return
+  }
   const version = queryVersion
+  let succeeded = false
   queryRunning = true
   try {
     await Promise.all(pending.map(async request => {
       await cache.load(request)
       if (version === queryVersion && !disposed) { updateData(); scheduleBackground() }
     }))
-  } catch (error) { if (version === queryVersion) store.notify(error instanceof Error ? error.message : String(error), 'error') }
+    succeeded = true
+  } catch (error) { if (version === queryVersion && !disposed) { querying.value = false; store.notify(error instanceof Error ? error.message : String(error), 'error') } }
   finally {
     queryRunning = false
     if (!disposed) {
-      querying.value = false
       if (queryRequested) void query()
+      else if (!buffered && succeeded) prefetch()
     }
   }
 }
@@ -215,7 +234,7 @@ function draw(): void {
   hits = []
   const visible = visibleRows()
   geometryCache.retain(visible.map(row => row.id))
-  const firstRow = Math.max(0, Math.floor(scrollTop.value / rowHeight) - 1)
+  const firstRow = firstVisibleRow()
   const scale = plotWidth() / Number(duration(viewport))
   const selectedCu = store.selectedCuId
   const selectedEvent = store.selectedEvent
@@ -223,10 +242,15 @@ function draw(): void {
   const ink = themeColor('operator-ink', '#111824')
   const highlight = themeColor('accent', '#eff5ff')
   for (const [offset, row] of visible.entries()) {
-    const top = ruler + (firstRow + offset) * rowHeight - scrollTop.value
+    const index = firstRow + offset
+    const rowHeight = layout.value.height(index)
+    const compact = rowHeight < 29
+    const inset = compact ? 0 : 5
+    const top = ruler + layout.value.top(index) - scrollTop.value
+    const centerY = top + rowHeight / 2
     if (top < ruler - rowHeight || top > height) continue
     canvas.save(); canvas.beginPath(); canvas.rect(0, ruler, width, height - ruler); canvas.clip()
-    const selected = row.cuId ? row.cuId === selectedCu : !!selectedEvent && selectedEvent.sourceId === row.sourceId && row.trackIds.includes(selectedEvent.trackId)
+    const selected = row.cuId ? row.cuId === selectedCu : !!selectedEvent && selectedEvent.sourceId === row.sourceId && row.trackIds.includes(selectedEvent.trackId) && (row.eventDepth === undefined || row.eventDepth === selectedEvent.depth)
     const isHeader = row.kind === 'device' || row.kind === 'source'
     if (isHeader) { canvas.fillStyle = themeColor('surface-raised', '#19212e'); canvas.fillRect(0, top, width, rowHeight) }
     else if (selected) { canvas.fillStyle = themeColor('selection-fill', '#8cafff0d'); canvas.fillRect(0, top, width, rowHeight) }
@@ -234,17 +258,17 @@ function draw(): void {
     canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : isHeader ? themeColor('canvas-label', '#b5c1d3') : themeColor('canvas-label', '#9caac0')
     canvas.font = `${isHeader ? '600 ' : ''}11px "Segoe UI", sans-serif`
     canvas.save(); canvas.beginPath(); canvas.rect(0, top, gutter - 4, rowHeight); canvas.clip()
-    if (row.kind === 'group') { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(store.expandedGroups.has(row.id) ? '▾' : '▸', 12, top + 14); canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : themeColor('canvas-label', '#a1afc3') }
+    if (row.kind === 'group') { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(store.expandedGroups.has(row.id) ? '▾' : '▸', 12, centerY); canvas.fillStyle = selected ? themeColor('accent', '#c0d2ff') : themeColor('canvas-label', '#a1afc3') }
     const labelLeft = row.treeDepth !== undefined ? 26 + Math.min(row.treeDepth, 6) * 12 : row.kind === 'track' ? 29 : isHeader ? 13 : 26
-    if (row.hasChildren) { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(row.collapsed ? '▸' : '▾', labelLeft - 14, top + 14); canvas.fillStyle = themeColor('canvas-label', '#a1afc3') }
+    if (row.hasChildren) { canvas.fillStyle = themeColor('canvas-muted', '#64738b'); canvas.fillText(row.collapsed ? '▸' : '▾', labelLeft - 14, centerY); canvas.fillStyle = themeColor('canvas-label', '#a1afc3') }
     const label = row.treeDepth !== undefined || row.kind === 'source' ? fitTimelineLabel(row.label, Math.max(10, gutter - 57 - labelLeft), text => canvas.measureText(text).width) : row.label
-    canvas.fillText(label, labelLeft, top + 14)
-    canvas.fillStyle = themeColor('canvas-muted', '#596b86'); canvas.font = '11px "Segoe UI", sans-serif'; canvas.textAlign = 'right'; canvas.fillText(row.subtitle, gutter - 13, top + 14); canvas.textAlign = 'left'
+    canvas.fillText(label, labelLeft, centerY)
+    canvas.fillStyle = themeColor('canvas-muted', '#596b86'); canvas.font = '11px "Segoe UI", sans-serif'; canvas.textAlign = 'right'; canvas.fillText(row.subtitle, gutter - 13, centerY); canvas.textAlign = 'left'
     canvas.restore()
     if (row.trackIds.length) {
-      canvas.save(); canvas.beginPath(); canvas.rect(gutter, top + 2, plotWidth(), rowHeight - 4); canvas.clip()
+      canvas.save(); canvas.beginPath(); canvas.rect(gutter, top + (compact ? 0 : 2), plotWidth(), rowHeight - (compact ? 0 : 4)); canvas.clip()
       const tracks = row.trackIds.map(trackId => data.get(`${row.sourceId}:${trackId}`)).filter((track): track is TimelineTrackData => track !== undefined)
-      const geometry = geometryCache.read(row.id, tracks, viewport.start)
+      const geometry = geometryCache.read(row.id, tracks, viewport.start, row.eventDepth)
       const start = Number(viewport.start - geometry.origin)
       const end = Number(viewport.end - geometry.origin)
       const merged = new Map<number, TimelineSpan<ReplayDensity>>()
@@ -270,9 +294,9 @@ function draw(): void {
         const right = Math.min(width - 13, gutter + (span.end - start) * scale)
         if (right < gutter || left > width) continue
         canvas.fillStyle = selected ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
-        canvas.fillRect(left, top + 5, Math.max(2, right - left - 0.5), rowHeight - 10)
-        if (span.label) drawLabel(canvas, span.label, left, right, top, ink)
-        hits.push({ bin: span.item, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
+        canvas.fillRect(left, top + inset, Math.max(2, right - left - 0.5), rowHeight - inset * 2)
+        if (span.label) drawLabel(canvas, span.label, left, right - 0.5, centerY, ink)
+        hits.push({ bin: span.item, left, right: Math.max(left + 2, right), top: top + (compact ? 0 : 4), bottom: top + rowHeight - (compact ? 0 : 3) })
       }
       for (const span of geometry.events) {
         if (span.start >= end || span.end <= start) continue
@@ -282,10 +306,10 @@ function draw(): void {
         if (right < gutter || left > width) continue
         const chosen = event.id === selectedEvent?.id && event.sourceId === selectedEvent.sourceId
         canvas.fillStyle = chosen ? `${span.paint.slice(0, 7)}${selectedOpacity}` : span.paint
-        canvas.beginPath(); canvas.roundRect(left, top + 5, Math.max(1, right - left - 1), rowHeight - 10, 2); canvas.fill()
+        canvas.beginPath(); canvas.roundRect(left, top + inset, Math.max(1, right - left - 1), rowHeight - inset * 2, compact ? 0 : 2); canvas.fill()
         if (chosen) { canvas.strokeStyle = highlight; canvas.stroke() }
-        drawLabel(canvas, span.label, left, right, top, ink)
-        hits.push({ event, left, right: Math.max(left + 2, right), top: top + 4, bottom: top + rowHeight - 3 })
+        drawLabel(canvas, span.label, left, right - 1, centerY, ink)
+        hits.push({ event, left, right: Math.max(left + 2, right), top: top + (compact ? 0 : 4), bottom: top + rowHeight - (compact ? 0 : 3) })
       }
       canvas.restore()
     }
@@ -375,7 +399,7 @@ function pointerDown(event: PointerEvent): void {
   rememberPointer(point.x)
   const pan = event.button === 1 || event.button === 2 || store.spaceHeld
   if (point.x < gutter && !pan) {
-    const row = store.rows[Math.floor((point.y - ruler + scrollTop.value) / rowHeight)]
+    const row = store.rows[layout.value.indexAt(point.y - ruler + scrollTop.value)]
     if (row?.kind === 'group') { store.toggleGroup(row.id); if (row.cuId) store.selectCu(row.cuId, true) }
     else if (row?.hasChildren) store.toggleTrack(row.id)
     return
@@ -477,15 +501,15 @@ function overviewMove(event: PointerEvent): void {
 function overviewUp(event: PointerEvent): void { overviewGesture = null; if (overviewCanvas.value?.hasPointerCapture(event.pointerId)) overviewCanvas.value.releasePointerCapture(event.pointerId) }
 
 watch(() => [store.viewport, store.rows, store.loading], invalidate)
-watch(() => store.displayedSources, () => { stopMotion(); queryVersion++; cache.clear(); geometryCache.clear(); invalidate() })
+watch(() => store.displayedSources, () => { stopMotion(); queryVersion++; geometryCache.clear(); invalidate() })
 watch(() => [store.currentTime, store.selection, store.bookmarks], scheduleOverlay, { deep: false })
 watch(() => [store.selectedEvent, store.selectedCuId], scheduleBackground)
 watch(() => store.timelineFocus, target => {
   if (!target || !scroller.value) return
-  const index = store.rows.findIndex(row => row.sourceId === target.sourceId && (target.trackId === undefined ? row.kind === 'device' || row.kind === 'source' : row.trackIds.includes(target.trackId)))
+  const index = store.rows.findIndex(row => row.sourceId === target.sourceId && (target.trackId === undefined ? row.kind === 'device' || row.kind === 'source' : row.trackIds.includes(target.trackId) && (target.eventDepth === undefined || row.eventDepth === target.eventDepth)))
   if (index < 0) return
-  const top = index * rowHeight
-  if (target.trackId !== undefined && top >= scrollTop.value && top + rowHeight <= scrollTop.value + height - ruler) return
+  const top = layout.value.top(index)
+  if (target.trackId !== undefined && top >= scrollTop.value && top + layout.value.height(index) <= scrollTop.value + height - ruler) return
   verticalMotion.cancel()
   scroller.value.scrollTop = top
   scroll()
@@ -497,8 +521,8 @@ watch(() => store.selectedCuId, id => {
   if (!id || !scroller.value) return
   verticalMotion.cancel()
   const index = store.rows.findIndex(row => row.cuId === id)
-  const top = index * rowHeight
-  if (top < scrollTop.value || top > scrollTop.value + height - ruler - rowHeight) scroller.value.scrollTop = top
+  const top = layout.value.top(index)
+  if (top < scrollTop.value || top > scrollTop.value + height - ruler - layout.value.height(index)) scroller.value.scrollTop = top
 })
 onMounted(() => {
   if (scroller.value) scroller.value.scrollTop = store.ui.timelineScrollTop
@@ -506,7 +530,7 @@ onMounted(() => {
   if (viewportElement.value) observer.observe(viewportElement.value)
   invalidate()
 })
-onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; cache.clear(); geometryCache.clear(); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
+onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.setZoomPointer(null); observer?.disconnect(); queryVersion++; geometryCache.clear(); if (prefetchTimer) clearTimeout(prefetchTimer); if (queryFrame) cancelAnimationFrame(queryFrame); if (drawFrame) cancelAnimationFrame(drawFrame); if (overlayFrame) cancelAnimationFrame(overlayFrame) })
 </script>
 
 <template>
@@ -534,7 +558,7 @@ onBeforeUnmount(() => { disposed = true; stopMotion(); store.stopZoom(); store.s
         </div>
       </div>
       <canvas ref="overlay" class="timeline-overlay" :class="{ panning }" :aria-busy="store.zooming || store.panningViewport" role="img" aria-label="轨道与任务时间轴。左键拖动框选，右键拖动平移，W 在鼠标处放大，S 在鼠标处缩小，A 向左平移，D 向右平移。点击事件定位到鼠标对应时间。" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @pointerleave="pointerLeave" @dblclick="doubleClick" @wheel.prevent="wheel" @contextmenu.prevent />
-      <div ref="scroller" class="timeline-vertical-scroller" @scroll="scroll" @wheel.prevent="wheel" @pointerdown="stopMotion"><div :style="{ height: `${store.rows.length * rowHeight + ruler}px` }" /></div>
+      <div ref="scroller" class="timeline-vertical-scroller" @scroll="scroll" @wheel.prevent="wheel" @pointerdown="stopMotion"><div :style="{ height: `${layout.totalHeight + ruler}px` }" /></div>
       <div v-if="querying" class="timeline-query-loading"><LoaderCircle :size="12" class="spin" />更新窗口</div>
       <div v-if="tooltip && !gesture" class="canvas-tooltip timeline-tooltip" :style="{ left: `${tooltip.left}px`, top: `${tooltip.top}px` }"><strong>{{ tooltip.label }}</strong><span>{{ tooltip.description }}</span></div>
       <div v-if="!store.displayedSources.length && !store.loading" class="timeline-empty"><Focus :size="27" /><span>{{ store.sources.length ? '在左侧勾选要显示的文件' : '导入 trace，开始探索推理过程' }}</span></div>

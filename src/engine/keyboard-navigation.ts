@@ -14,7 +14,7 @@ export class KeyboardNavigation {
   private frame: number | null = null
 
   constructor(
-    private readonly step: (key: NavigationKey, elapsed: number | null) => void,
+    private readonly step: (key: NavigationKey, elapsed: number | null, speed: number) => void,
     private readonly scheduler: FrameScheduler = { now: () => performance.now(), request: callback => requestAnimationFrame(callback), cancel: frame => cancelAnimationFrame(frame) },
   ) {}
 
@@ -25,7 +25,7 @@ export class KeyboardNavigation {
     this.held.add(key)
     this.current = key
     this.started = this.lastWall = this.scheduler.now()
-    this.step(key, null)
+    this.step(key, null, 1)
     this.schedule()
   }
 
@@ -55,7 +55,15 @@ export class KeyboardNavigation {
     if (this.current === null) return
     const elapsed = Math.min(50, Math.max(0, wall - Math.max(this.lastWall, this.started + 80)))
     this.lastWall = wall
-    if (elapsed > 0) this.step(this.current, elapsed)
+    if (elapsed > 0) {
+      const held = wall - this.started - 80
+      const integral = (time: number): number => {
+        const progress = Math.max(0, Math.min(1, time / 1200))
+        return 1200 * (progress ** 3 - progress ** 4 / 2) + Math.max(0, time - 1200)
+      }
+      const speed = 1 + (integral(held) - integral(held - elapsed)) / elapsed
+      this.step(this.current, elapsed, Math.max(1, Math.min(2, speed)))
+    }
     this.schedule()
   }
 }

@@ -34,6 +34,29 @@ describe('colored density aggregation', () => {
     } finally { database.close() }
   })
 
+  it('keeps nested density lanes separate while retaining combined queries for Megakernel', async () => {
+    const database = new DatabaseSync(':memory:')
+    try {
+      database.exec("CREATE TABLE slice (id INTEGER, track_id INTEGER, ts INTEGER, dur INTEGER, name TEXT, depth INTEGER); INSERT INTO slice VALUES (1, 7, 0, 100, 'parent', 0), (2, 7, 10, 20, 'child', 1)")
+      const engine = { query: async (sql: string) => { const statement = database.prepare(sql); statement.setReadBigInts(true); return statement.all() as SqlRow[] } }
+      const lanes = await queryDensity(engine, { start: 0n, end: 100n, buckets: 1, byDepth: true }, 100n)
+      expect(lanes.map(bin => ({ depth: bin.depth, count: bin.count, name: bin.name }))).toEqual([{ depth: 0, count: 1, name: 'parent' }, { depth: 1, count: 1, name: 'child' }])
+      const combined = await queryDensity(engine, { start: 0n, end: 100n, buckets: 1 }, 100n)
+      expect(combined).toHaveLength(1)
+      expect(combined[0]).toMatchObject({ count: 2, name: 'parent' })
+      expect(combined[0]?.depth).toBeUndefined()
+    } finally { database.close() }
+  })
+
+  it('chooses the longest clipped representative and resolves duration ties by original record ID', async () => {
+    const database = new DatabaseSync(':memory:')
+    try {
+      database.exec("CREATE TABLE slice (id INTEGER, track_id INTEGER, ts INTEGER, dur INTEGER, name TEXT); INSERT INTO slice VALUES (9, 1, 5, 90, 'same duration, later id'), (2, 1, 0, 90, '算子 👾'), (1, 1, -90, 100, 'long before clipping'), (3, 1, 15, 60, 'shorter')")
+      const engine = { query: async (sql: string) => { const statement = database.prepare(sql); statement.setReadBigInts(true); return statement.all() as SqlRow[] } }
+      expect(await queryDensity(engine, { start: 0n, end: 100n, buckets: 1 }, 100n)).toEqual([{ trackId: 1, start: 0n, end: 95n, count: 4, name: '算子 👾', representativeDuration: 90n }])
+    } finally { database.close() }
+  })
+
   it('skips invalid, empty or unmapped queries', async () => {
     const engine = { query: vi.fn(async () => []) }
     for (const query of [

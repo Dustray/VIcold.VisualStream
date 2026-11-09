@@ -1,4 +1,4 @@
-import type { ActivityBin, DensityBin, EventPage, EventQuery, GroupStatistics, ImportProgress, ParsedTraceSource, RangeStatistics, RawSpan, RawTrack, SourceMetadata, TimeRange, TrackGroup } from './types'
+import type { ActivityBin, DensityBin, DensityQuery, EventPage, EventQuery, GroupStatistics, ImportProgress, ParsedTraceSource, RangeStatistics, RawSpan, RawTrack, SourceMetadata, TimeRange, TrackGroup } from './types'
 
 export class WorkerTraceSource implements ParsedTraceSource {
   metadata!: SourceMetadata
@@ -35,7 +35,7 @@ export class WorkerTraceSource implements ParsedTraceSource {
 
   tracks() { return this.call<RawTrack[]>('tracks', null) }
   events(query: EventQuery) { return this.call<EventPage>('events', query) }
-  density(query: EventQuery & { buckets: number }) { return this.call<DensityBin[]>('density', query) }
+  density(query: DensityQuery) { return this.call<DensityBin[]>('density', query) }
   statistics(query: EventQuery) { return this.call<RangeStatistics>('statistics', query) }
   groupedStatistics(range: TimeRange, groups: TrackGroup[]) { return this.call<GroupStatistics[]>('groupedStatistics', { range, groups }) }
   activity(range: TimeRange, groups: TrackGroup[], buckets: number) { return this.call<ActivityBin[]>('activity', { range, groups, buckets }) }

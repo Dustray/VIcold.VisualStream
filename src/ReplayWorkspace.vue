@@ -25,13 +25,13 @@ const props = defineProps<{ session: ReplaySession }>()
 const store = props.session.store
 provideReplayStore(store)
 const sessions = useSessionsStore()
-const keyboardNavigation = new KeyboardNavigation((key, elapsed) => {
+const keyboardNavigation = new KeyboardNavigation((key, elapsed, speed) => {
   if (key === 'w' || key === 's') {
-    const factor = elapsed === null ? 0.8 : Math.pow(0.9, elapsed / 48)
+    const factor = elapsed === null ? 0.8 : Math.pow(0.9, elapsed * speed / 48)
     store.zoom(key === 'w' ? factor : 1 / factor)
   } else {
     const span = duration(store.viewport)
-    const distance = elapsed === null ? span / 10n || 1n : BigInt(Math.round(Number(span) * elapsed / 1000))
+    const distance = elapsed === null ? span / 10n || 1n : BigInt(Math.round(Number(span) * elapsed * speed / 1000))
     store.pan(key === 'a' ? -distance : distance)
   }
 })
@@ -221,7 +221,7 @@ onBeforeUnmount(() => { keyboardNavigation.cancel(); document.removeEventListene
 
 <template>
   <div class="app-shell" spellcheck="false" @dragenter="dragEnter" @dragleave="dragLeave" @dragover="dragOver" @drop="drop" @dragstart="preventNativeDrag" @selectstart="preventNativeSelection" @contextmenu="preventNativeSelection" @mousedown="preventAutoScroll" @pointerdown="clearTextSelection" @wheel="preventPageZoom">
-    <input ref="traceInput" class="sr-only" type="file" multiple accept=".perfetto-trace,.pftrace,.trace,.pb" data-testid="trace-input" @change="filesSelected" />
+    <input ref="traceInput" class="sr-only" type="file" multiple accept=".perfetto-trace,.pftrace,.trace,.pb,.json,.json.gz,.gz" data-testid="trace-input" @change="filesSelected" />
     <input ref="projectInput" class="sr-only" type="file" accept=".json" data-testid="project-input" @change="projectSelected" />
     <header class="app-header" :class="{ 'desktop-header': !!host.window }" :data-tauri-drag-region="host.window ? '' : undefined">
       <div class="brand"><span class="brand-symbol"><Workflow :size="17" /></span><span>VisualStream</span></div>

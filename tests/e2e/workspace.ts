@@ -16,6 +16,7 @@ export async function importTraces(page: Page, kind: 'single' | 'dual' | 'all' =
 
 export async function openWorkspace(page: Page, kind: 'single' | 'dual' | 'all' = 'single'): Promise<void> {
   await page.goto('/')
+  await page.getByRole('combobox', { name: '导入计算模式', exact: true }).selectOption('megakernel')
   await importTraces(page, kind)
 }
 

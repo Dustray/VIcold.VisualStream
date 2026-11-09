@@ -40,6 +40,12 @@ export class ViewportZoom {
     this.frame = this.scheduler.request(time => this.advance(time))
   }
 
+  get destination(): TimeRange | null {
+    if (this.targetSpan === null) return null
+    const start = this.anchor - BigInt(Math.round(Number(this.targetSpan) * this.ratio))
+    return fitRange({ start, end: start + this.targetSpan }, this.bounds())
+  }
+
   cancel(): void {
     if (this.frame !== null) this.scheduler.cancel(this.frame)
     this.frame = null

@@ -43,7 +43,7 @@ describe('default compute interpretation', () => {
     model.offset = -500n
     expect(model.range).toEqual({ start: -500n, end: 2500n })
     expect(await model.density({ start: -500n, end: 1500n, trackIds: [9], buckets: 3 })).toEqual([{ sourceId: 'source', trackId: 9, start: -500n, end: 0n, count: 2, name: 'ordinary event' }])
-    expect(raw.density).toHaveBeenCalledWith({ start: 1000n, end: 3000n, trackIds: [9], buckets: 3 })
+    expect(raw.density).toHaveBeenCalledWith({ start: 1000n, end: 3000n, trackIds: [9], buckets: 3, byDepth: true })
     expect((await model.search('event', 50)).map(event => event.id)).toEqual([1, 2])
     expect(raw.search).toHaveBeenCalledWith('event', 50)
     expect(await model.statistics({ start: -500n, end: 1500n })).toEqual({ count: 2, sumDuration: 1300n, unionDuration: 1000n })

@@ -61,7 +61,7 @@ describe('workspace hosts', () => {
   it('rejects oversized traces before transferring them across IPC', async () => {
     vi.mocked(open).mockResolvedValue(['D:\\huge.trace'])
     vi.mocked(stat).mockResolvedValue({ isFile: true, size: traceFileLimit + 1 } as Awaited<ReturnType<typeof stat>>)
-    await expect(desktopHost.openTraceFiles!()).rejects.toThrow('256 MB')
+    await expect(desktopHost.openTraceFiles!()).rejects.toThrow('1 GB')
     expect(readFile).not.toHaveBeenCalled()
   })
 

@@ -1,5 +1,5 @@
 import { ParserRegistry } from '../core/registry'
-import type { EventQuery, ParsedTraceSource, TimeRange, TrackGroup } from '../core/types'
+import type { DensityQuery, EventQuery, ParsedTraceSource, TimeRange, TrackGroup } from '../core/types'
 import { PerfettoParser } from '../parsers/perfetto/parser'
 
 const registry = new ParserRegistry().register(new PerfettoParser())
@@ -22,7 +22,7 @@ context.onmessage = (event: MessageEvent<{ id: number; method: string; payload: 
         if (!source) throw new Error('文件尚未打开')
         if (method === 'tracks') result = await source.tracks()
         else if (method === 'events') result = await source.events(payload as EventQuery)
-        else if (method === 'density') result = await source.density(payload as EventQuery & { buckets: number })
+        else if (method === 'density') result = await source.density(payload as DensityQuery)
         else if (method === 'statistics') result = await source.statistics(payload as EventQuery)
         else if (method === 'groupedStatistics') { const query = payload as { range: TimeRange; groups: TrackGroup[] }; result = await source.groupedStatistics(query.range, query.groups) }
         else if (method === 'activity') { const query = payload as { range: TimeRange; groups: TrackGroup[]; buckets: number }; result = await source.activity(query.range, query.groups, query.buckets) }

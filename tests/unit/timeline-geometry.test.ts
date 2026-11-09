@@ -12,6 +12,36 @@ function track(events: ReplayEvent[], bins: ReplayDensity[] = []): TimelineTrack
 }
 
 describe('prepared timeline geometry', () => {
+  it('joins adjoining cached fragments of an event without duplicating its label or changing its timestamps', () => {
+    const cache = new TimelineGeometryCache(() => '#123456ff')
+    const original = event(1, 10n, 290n)
+    const input: TimelineTrackData = { events: [], bins: [], dense: false, segments: [
+      { range: { start: 0n, end: 150n }, data: track([original]) },
+      { range: { start: 150n, end: 200n }, data: track([{ ...original }]) },
+      { range: { start: 250n, end: 300n }, data: track([{ ...original }]) },
+    ] }
+    const geometry = cache.read('row', [input], 0n)
+    expect(geometry.events.map(span => [span.start, span.end])).toEqual([[10, 200], [250, 290]])
+    expect(geometry.events[0]!.item).toBe(original)
+    expect(original).toMatchObject({ start: 10n, end: 290n })
+  })
+  it('clips coarse fallback to missing regions while preserving original event times and fine gaps', () => {
+    const cache = new TimelineGeometryCache(() => '#123456ff')
+    const fine = event(1, 40n, 90n)
+    const bin: ReplayDensity = { sourceId: 'source', trackId: 1, start: 0n, end: 300n, count: 100 }
+    const input: TimelineTrackData = { events: [], bins: [], dense: true, segments: [
+      { range: { start: 0n, end: 50n }, data: track([], [bin]) },
+      { range: { start: 50n, end: 200n }, data: track([fine]) },
+      { range: { start: 200n, end: 300n }, data: track([], [bin]) },
+    ] }
+    const geometry = cache.read('row', [input], 0n)
+    expect(geometry.events).toHaveLength(1)
+    expect(geometry.events[0]).toMatchObject({ start: 50, end: 90 })
+    expect(geometry.events[0]!.item).toBe(fine)
+    expect(fine.start).toBe(40n)
+    expect(geometry.bins.map(span => [span.start, span.end])).toEqual([[0, 50], [200, 300]])
+    expect(cache.read('row', [input], 20n)).toBe(geometry)
+  })
   it('paints shorter overlapping events last across tracks without modifying query results', () => {
     const paint = vi.fn(() => '#123456ff')
     const cache = new TimelineGeometryCache(paint)
@@ -71,6 +101,24 @@ describe('prepared timeline geometry', () => {
     const updated = cache.read('second', [input], 0n)
     expect(updated).not.toBe(second)
     expect(updated.events[0]!.paint).toBe(color)
+  })
+
+  it('projects only the requested nesting depth and includes all depths in a folded summary', () => {
+    const cache = new TimelineGeometryCache(() => '#123456ff')
+    const input = track([event(1, 0n, 100n), { ...event(2, 10n, 20n), depth: 1 }], [
+      { trackId: 1, sourceId: 'source', start: 0n, end: 100n, count: 1, depth: 0 },
+      { trackId: 1, sourceId: 'source', start: 10n, end: 20n, count: 1, depth: 1 },
+    ])
+    const parent = cache.read('row', [input], 0n, 0)
+    expect(parent.events.map(span => span.item.id)).toEqual([1])
+    expect(parent.bins.map(span => span.item.depth)).toEqual([0])
+    const child = cache.read('row', [input], 0n, 1)
+    expect(child).not.toBe(parent)
+    expect(child.events.map(span => span.item.id)).toEqual([2])
+    expect(child.bins.map(span => span.item.depth)).toEqual([1])
+    const summary = cache.read('row', [input], 0n)
+    expect(summary.events).toHaveLength(2)
+    expect(summary.bins).toHaveLength(2)
   })
 
   it('accepts rows whose tracks have no loaded events yet', () => {

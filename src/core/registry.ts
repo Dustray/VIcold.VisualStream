@@ -21,7 +21,7 @@ export class PluginRegistry<Plugin extends { readonly id: string }> {
 export class ParserRegistry extends PluginRegistry<TraceFileParser> {
   async detect(file: File): Promise<TraceFileParser> {
     for (const parser of this.values()) if (await parser.probe(file)) return parser
-    throw new Error('无法识别源格式。当前已安装 Perfetto Protobuf 解析器。')
+    throw new Error('无法识别源格式。当前支持 Perfetto Protobuf、JSON trace 及其 gzip 压缩文件。')
   }
 }
 

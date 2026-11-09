@@ -1,4 +1,4 @@
-import type { ComputeModelPlugin, EventQuery, ParsedTraceSource, RawSpan, ReplayDataSource, ReplayEvent, TimeRange } from '../core/types'
+import type { ComputeModelPlugin, DensityQuery, EventQuery, ParsedTraceSource, RawSpan, ReplayDataSource, ReplayEvent, TimeRange } from '../core/types'
 
 export class DefaultModel implements ComputeModelPlugin {
   readonly id = 'default'
@@ -26,9 +26,9 @@ class DefaultDataSource implements ReplayDataSource {
     const page = await this.source.events(this.rawQuery(query, shift))
     return { events: page.events.map(event => this.mapEvent(event, shift)), truncated: page.truncated }
   }
-  async density(query: EventQuery & { buckets: number }) {
+  async density(query: DensityQuery) {
     const shift = this.source.metadata.start - this.offset
-    const bins = await this.source.density({ ...this.rawQuery(query, shift), buckets: query.buckets })
+    const bins = await this.source.density({ ...this.rawQuery(query, shift), buckets: query.buckets, byDepth: true })
     return bins.map(bin => ({ ...bin, sourceId: this.source.metadata.id, start: bin.start - shift, end: bin.end - shift }))
   }
   statistics(query: EventQuery) { return this.source.statistics(this.rawQuery(query, this.source.metadata.start - this.offset)) }

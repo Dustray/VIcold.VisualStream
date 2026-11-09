@@ -26,6 +26,19 @@ function harness(initial: TimeRange, bounds = initial) {
 }
 
 describe('smooth viewport zoom', () => {
+  it('exposes the final anchored range before animation so details can be fetched ahead', () => {
+    const view = harness({ start: 0n, end: 1_000_000n })
+    expect(view.zoom.destination).toBeNull()
+    view.zoom.zoom(0.5, 0.8)
+    expect(view.zoom.destination).toEqual({ start: 400_000n, end: 900_000n })
+    view.zoom.zoom(0.5, 0.8)
+    expect(view.zoom.destination).toEqual({ start: 600_000n, end: 850_000n })
+    view.tick()
+    expect(duration(view.range())).toBeGreaterThan(250_000n)
+    expect(view.zoom.destination).toEqual({ start: 600_000n, end: 850_000n })
+    view.zoom.cancel()
+    expect(view.zoom.destination).toBeNull()
+  })
   it('animates every frame around the pointer, including large absolute timestamps', () => {
     const origin = 1_700_000_000_000_000_000n
     const view = harness({ start: origin, end: origin + 1_000_000n })

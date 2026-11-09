@@ -4,7 +4,7 @@ export type SqlValue = bigint | number | string | Uint8Array | null
 export type SqlRow = Record<string, SqlValue>
 
 export interface TimeRange { start: Nanoseconds; end: Nanoseconds }
-export interface RawTrack { id: number; parentId: number | null; name: string }
+export interface RawTrack { id: number; parentId: number | null; name: string; subtitle?: string; maxDepth?: number; virtual?: boolean }
 export interface RawSpan extends TimeRange {
   id: number
   trackId: number
@@ -14,7 +14,7 @@ export interface RawSpan extends TimeRange {
   incomplete: boolean
 }
 export interface EventPage { events: RawSpan[]; truncated: boolean }
-export interface DensityBin extends TimeRange { trackId: number; count: number; name?: string; representativeDuration?: bigint }
+export interface DensityBin extends TimeRange { trackId: number; count: number; name?: string; representativeDuration?: bigint; depth?: number }
 export interface ActivityBin extends TimeRange { busyDuration: bigint }
 export interface RangeStatistics { count: number; sumDuration: bigint; unionDuration: bigint }
 export interface TrackGroup { id: string; trackIds: number[] }
@@ -33,11 +33,12 @@ export interface SourceMetadata extends TimeRange {
   engineVersion: string
 }
 export interface EventQuery extends TimeRange { trackIds?: number[]; limit?: number }
+export interface DensityQuery extends EventQuery { buckets: number; byDepth?: boolean }
 export interface ParsedTraceSource {
   readonly metadata: SourceMetadata
   tracks(): Promise<RawTrack[]>
   events(query: EventQuery): Promise<EventPage>
-  density(query: EventQuery & { buckets: number }): Promise<DensityBin[]>
+  density(query: DensityQuery): Promise<DensityBin[]>
   statistics(query: EventQuery): Promise<RangeStatistics>
   groupedStatistics(range: TimeRange, groups: TrackGroup[]): Promise<GroupStatistics[]>
   activity(range: TimeRange, groups: TrackGroup[], buckets: number): Promise<ActivityBin[]>
@@ -68,6 +69,7 @@ export interface TimelineRow {
   treeDepth?: number
   hasChildren?: boolean
   collapsed?: boolean
+  eventDepth?: number
   trackIds: number[]
 }
 export interface ReplayDataSource {
@@ -79,7 +81,7 @@ export interface ReplayDataSource {
   offset: bigint
   readonly range: TimeRange
   events(query: EventQuery): Promise<{ events: ReplayEvent[]; truncated: boolean }>
-  density(query: EventQuery & { buckets: number }): Promise<ReplayDensity[]>
+  density(query: DensityQuery): Promise<ReplayDensity[]>
   statistics(query: EventQuery): Promise<RangeStatistics>
   cuStatistics(range: TimeRange): Promise<GroupStatistics[]>
   activity(range: TimeRange, buckets: number): Promise<ActivityBin[]>

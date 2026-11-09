@@ -41,6 +41,31 @@ describe('independent replay sessions', () => {
   })
   afterEach(() => { sessions.dispose(); vi.clearAllTimers(); vi.useRealTimers() })
 
+  it('starts every new session in default mode with generic task and density views', () => {
+    for (const session of [sessions.activeSession, sessions.createSession()]) {
+      expect(session.store.computeModelId).toBe('default')
+      expect(session.store.supportsCu).toBe(false)
+      expect(session.store.activeView).toBe('tasks')
+      expect(session.store.overviewMetric).toBe('density')
+    }
+  })
+
+  it('retains timeline data across tabs and releases it when its source or session closes', async () => {
+    const first = sessions.activeSession
+    await first.store.importFiles([new File(['one'], 'gpu0.trace')])
+    const request = { source: first.store.sources[0]!, range: { ...first.store.bounds }, trackIds: [1], resolution: 1, density: false }
+    await first.store.timelineCache.load(request)
+    sessions.createSession()
+    sessions.activate(first.id)
+    expect(first.store.timelineCache.covers(request)).toBe(true)
+    await first.store.setComputeModel('megakernel')
+    expect(first.store.timelineCache.covers(request)).toBe(false)
+    const changed = { ...request, source: first.store.sources[0]! }
+    await first.store.timelineCache.load(changed)
+    sessions.close(first.id)
+    expect(first.store.timelineCache.covers(changed)).toBe(false)
+  })
+
   it('retains files, viewport, selection, speed and bookmarks while pausing inactive playback', async () => {
     const first = sessions.activeSession
     await first.store.importFiles([new File(['one'], 'gpu0.trace'), new File(['two'], 'gpu1.trace')])
@@ -129,6 +154,7 @@ describe('independent replay sessions', () => {
   })
 
   it('closes a source during model construction and ignores its late tracks', async () => {
+    await sessions.activeSession.store.setComputeModel('megakernel')
     const raw = source()
     let finish!: (value: RawTrack[]) => void
     raw.tracks = vi.fn(() => new Promise<RawTrack[]>(resolve => { finish = resolve }))
@@ -162,6 +188,7 @@ describe('independent replay sessions', () => {
 
   it('reinterprets existing files without reopening workers and preserves the replay coordinates', async () => {
     const store = sessions.activeSession.store
+    await sessions.activeSession.store.setComputeModel('megakernel')
     await store.importFiles([new File(['one'], 'gpu0.trace'), new File(['two'], 'gpu1.trace')])
     store.seek(20000000n)
     store.setViewport({ start: 10000000n, end: 40000000n })
@@ -190,6 +217,7 @@ describe('independent replay sessions', () => {
 
   it('uses the selected default mode for history and restores the mode from a project', async () => {
     const first = sessions.activeSession
+    await sessions.activeSession.store.setComputeModel('megakernel')
     await first.store.importFiles([new File(['one'], 'gpu0.trace')])
     const second = sessions.createSession()
     await second.store.setComputeModel('default')
@@ -237,6 +265,21 @@ describe('independent replay sessions', () => {
     expect(storage.open).toHaveBeenCalledTimes(2)
   })
 
+  it('reveals the exact nested lane when selecting an event inside a folded process', async () => {
+    const store = sessions.activeSession.store
+    await store.setComputeModel('default')
+    const raw = source()
+    raw.tracks = async () => [{ id: -1, parentId: null, name: 'process', virtual: true }, { id: 0, parentId: -1, name: 'thread', maxDepth: 2 }]
+    storage.open.mockResolvedValueOnce(raw)
+    await store.importFiles([new File(['nested'], 'nested.json.gz')])
+    const sourceId = store.sources[0]!.source.metadata.id
+    store.setTracksExpanded(false)
+    expect(store.rows.filter(row => row.kind === 'track').map(row => row.trackIds)).toEqual([[0]])
+    await store.selectEvent({ id: 3, sourceId, trackId: 0, name: 'nested', depth: 2, argSetId: 0, start: 10n, end: 20n, incomplete: false })
+    expect(store.timelineFocus).toEqual({ sourceId, trackId: 0, eventDepth: 2 })
+    expect(store.rows.find(row => row.id === `${sourceId}/track/0/depth/2`)).toMatchObject({ eventDepth: 2, trackIds: [0] })
+  })
+
   it('keeps the current model and workers if a new interpretation fails', async () => {
     const store = sessions.activeSession.store
     await store.setComputeModel('default')
@@ -254,6 +297,7 @@ describe('independent replay sessions', () => {
 
   it('discards a cancelled or closed mode switch without repopulating the session', async () => {
     const first = sessions.activeSession
+    await sessions.activeSession.store.setComputeModel('megakernel')
     await first.store.importFiles([new File(['one'], 'gpu0.trace')])
     const cancelled = first.store.setComputeModel('default')
     first.store.cancelImport()

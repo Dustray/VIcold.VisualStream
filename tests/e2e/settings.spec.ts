@@ -22,7 +22,7 @@ test('compact titlebar groups actions and settings support narrow windows and ke
   await expect(header.getByRole('group', { name: '应用选项' }).getByRole('button')).toHaveCount(2)
   await expect(page.getByRole('button', { name: '缩放到选区', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '放大时间轴', exact: true })).toBeDisabled()
-  await expect(page.getByRole('combobox', { name: '筛选计算卡', exact: true })).toBeDisabled()
+  await expect(page.getByRole('combobox', { name: '筛选计算卡', exact: true })).toHaveCount(0)
   await page.setViewportSize({ width: 1040, height: 640 })
   expect(await header.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
   await openSettings(page)

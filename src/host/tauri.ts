@@ -24,7 +24,7 @@ export const desktopHost: WorkspaceHost = {
     onResized: listener => getCurrentWindow().onResized(listener),
   },
   async openTraceFiles() {
-    const paths = await open({ title: '导入推理记录', multiple: true, directory: false, filters: [{ name: 'Perfetto trace', extensions: ['perfetto-trace', 'pftrace', 'trace', 'pb'] }] })
+    const paths = await open({ title: '导入推理记录', multiple: true, directory: false, filters: [{ name: 'Perfetto trace', extensions: ['perfetto-trace', 'pftrace', 'trace', 'pb', 'json', 'gz'] }] })
     if (!paths) return null
     const files: File[] = []
     for (const path of paths) files.push(await readPickedFile(path, traceFileLimit, traceFileLimitMessage))

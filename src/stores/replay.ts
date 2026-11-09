@@ -17,12 +17,13 @@ import { ViewportPan } from '../engine/viewport-pan'
 import { MegakernelModel } from '../models/megakernel'
 import { DefaultModel } from '../models/default'
 import { trackRows } from '../engine/track-tree'
+import { TimelineCache } from '../engine/timeline-cache'
 
 const modes = new ComputeModelRegistry().register(new MegakernelModel()).register(new DefaultModel())
 
 function setupReplay() {
   const sources = shallowRef<ReplayDataSource[]>([])
-  const computeModelId = ref<ComputeModelId>('megakernel')
+  const computeModelId = ref<ComputeModelId>('default')
   const supportsCu = computed(() => computeModelId.value === 'megakernel')
   const computeModelLabel = computed(() => supportsCu.value ? 'Megakernel' : '默认')
   const sourceParserId = ref('perfetto')
@@ -33,6 +34,7 @@ function setupReplay() {
     bookmarksExpanded: true,
     sessionExpanded: true,
     historyExpanded: true,
+    fileSplitRatio: null as number | null,
     timelineScrollTop: 0,
     upperRatio: null as number | null,
     restoreUpperRatio: null as number | null,
@@ -43,7 +45,7 @@ function setupReplay() {
     lastPreset: playbackSpeeds.indexOf(defaultPlaybackSpeed),
   })
   const selectedSourceIds = ref(new Set<string>())
-  const timelineFocus = shallowRef<{ sourceId: string; trackId?: number } | null>(null)
+  const timelineFocus = shallowRef<{ sourceId: string; trackId?: number; eventDepth?: number } | null>(null)
   const loading = ref(false)
   const progress = ref<ImportProgress>({ stage: '', fraction: 0 })
   const currentTime = ref(0n)
@@ -65,7 +67,7 @@ function setupReplay() {
   const eventArgs = ref<Record<string, string>>({})
   const activeEvents = shallowRef<ReplayEvent[]>([])
   const overview = shallowRef<ReplayDensity[]>([])
-  const overviewMetric = ref<'density' | 'utilization'>('utilization')
+  const overviewMetric = ref<'density' | 'utilization'>('density')
   const overviewActivity = shallowRef<ActivityBin[]>([])
   const overviewActivityLoading = ref(false)
   const overviewActivityError = ref<string | null>(null)
@@ -78,9 +80,11 @@ function setupReplay() {
   const selectionStats = shallowRef<RangeStatistics | null>(null)
   const statisticsLoading = ref(false)
   const toast = ref<{ message: string; kind: 'error' | 'info' } | null>(null)
-  const activeView = ref<'resources' | 'tasks' | 'utilization' | 'metrics'>('resources')
+  const activeView = ref<'resources' | 'tasks' | 'utilization' | 'metrics'>('tasks')
   const pendingProject = shallowRef<ProjectSnapshot | null>(null)
   const trackCache = new Map<string, RawTrack[]>()
+  const timelineCache = markRaw(new TimelineCache())
+  watch(sources, models => timelineCache.retain(models), { flush: 'sync' })
   const clock = markRaw(new PlaybackClock())
   clock.setSpeed(defaultPlaybackSpeed)
   let disposed = false
@@ -184,6 +188,7 @@ function setupReplay() {
   function dispose(): void {
     if (disposed) return
     disposed = true
+    timelineCache.clear()
     loadGeneration++
     projectGeneration++
     activeGeneration++
@@ -476,6 +481,7 @@ function setupReplay() {
   }
   function stopZoom(): void { viewportZoom.cancel(); viewportPan.cancel() }
   function stopPan(): void { viewportPan.cancel() }
+  function zoomDestination(): TimeRange | null { return viewportZoom.destination }
   function setZoomPointer(ratio: number | null): void { zoomPointer = ratio }
   function setViewport(range: TimeRange): void { stopZoom(); viewport.value = fitRange(range, bounds.value) }
   function fit(): void { setViewport(bounds.value) }
@@ -535,7 +541,7 @@ function setupReplay() {
       track = track.parentId === null ? undefined : byId.get(track.parentId)
     }
     collapsedTracks.value = collapsed
-    timelineFocus.value = { sourceId: event.sourceId, trackId: event.trackId }
+    timelineFocus.value = { sourceId: event.sourceId, trackId: event.trackId, ...(event.depth > 0 ? { eventDepth: event.depth } : {}) }
   }
   function toggleTrack(id: string): void { const next = new Set(collapsedTracks.value); if (next.has(id)) next.delete(id); else next.add(id); collapsedTracks.value = next }
   function setTracksExpanded(expanded: boolean): void {
@@ -548,7 +554,7 @@ function setupReplay() {
       for (const track of tracks) {
         const id = `${sourceId}/track/${track.id}`
         if (expanded) next.delete(id)
-        else if (parents.has(track.id)) next.add(id)
+        else if (parents.has(track.id) || track.maxDepth) next.add(id)
       }
     }
     collapsedTracks.value = next
@@ -685,7 +691,7 @@ function setupReplay() {
     notify('项目布局、书签、时钟偏移与播放位置已恢复')
   }
 
-  return { supportsCu, computeModelLabel, totalTracks, activeTrackCount, trackLabel, setComputeModel, toggleTrack, setTracksExpanded, focusEventTrack, ui, sources, timelineFocus, focusSource, computeModelId, sourceParserId, historyFiles, historyLoading, selectedSourceIds, selectedSources, displayedSources, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, toggleSource, selectAllSources, openHistory, removeHistory, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomToRange, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, playSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, restoreProject }
+  return { timelineCache, supportsCu, computeModelLabel, totalTracks, activeTrackCount, trackLabel, setComputeModel, toggleTrack, setTracksExpanded, focusEventTrack, ui, sources, timelineFocus, focusSource, computeModelId, sourceParserId, historyFiles, historyLoading, selectedSourceIds, selectedSources, displayedSources, loading, progress, currentTime, playing, buffering, speed, viewport, zooming, panningViewport, bounds, selection, looping, following, spaceHeld, spaceUsed, selectedEvent, selectedCuId, selectedDeviceId, eventArgs, activeEvents, activeByCu, overview, overviewMetric, overviewActivity, overviewActivityLoading, overviewActivityError, bookmarks, expandedGroups, searchText, searchResults, searching, selectionStats, statisticsLoading, toast, activeView, pendingProject, devices, displayedDevices, cus, totalEvents, diagnostics, rows, clock, initialize, toggleSource, selectAllSources, openHistory, removeHistory, importFiles, cancelImport, removeSource, seek, stepSpeed, setViewport, zoomDestination, stopZoom, stopPan, setZoomPointer, fit, pan, zoom, zoomToRange, zoomSelection, selectEvent, selectCu, toggleGroup, step, setSelection, playSelection, toggleLoop, addBookmark, removeBookmark, setOffset, notify, saveProject, restoreProject }
 }
 
 export function createReplayStore(id: string, pinia?: Pinia) { return defineStore(`replay:${id}`, setupReplay)(pinia) }

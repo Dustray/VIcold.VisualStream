@@ -29,7 +29,7 @@ export class PerfettoEngine {
   }
 
   append(bytes: Uint8Array): Promise<void> { return this.enqueue(async () => { await this.request(1, { appendTraceData: bytes }) }) }
-  finish(): Promise<void> { return this.enqueue(async () => { await this.request(2, {}) }) }
+  finish(): Promise<void> { return this.enqueue(async () => { await this.request(2, {}, 300000) }) }
   query(sql: string): Promise<SqlRow[]> { return this.enqueue(() => this.request(3, { queryArgs: { sqlQuery: sql } })) }
   close(): void { this.worker?.terminate(); if (this.workerUrl) { URL.revokeObjectURL(this.workerUrl); this.workerUrl = null }; this.port?.close(); this.fail(new Error('Perfetto 引擎已关闭')) }
 
@@ -38,9 +38,9 @@ export class PerfettoEngine {
     this.queue = result.catch(() => {})
     return result
   }
-  private request(method: number, payload: Record<string, unknown>): Promise<SqlRow[]> {
+  private request(method: number, payload: Record<string, unknown>, timeout = 60000): Promise<SqlRow[]> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending = null; reject(new Error('Perfetto 查询超时，请缩小范围或重新导入文件。')) }, 60000)
+      const timer = setTimeout(() => { this.pending = null; reject(new Error(method === 2 ? 'Perfetto 整理事件超时，请重新导入或减少同时打开的大文件。' : 'Perfetto 查询超时，请缩小范围或重新导入文件。')) }, timeout)
       this.pending = { method, query: new QueryRows(), resolve, reject, timer }
       this.port.postMessage(encodeRequest(this.sequence++, method, payload))
     })
